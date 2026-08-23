@@ -147,4 +147,12 @@ export async function setSetting(key, value) {
   await save();
 }
 
+export async function removeSetting(key) {
+  await ensureLoaded();
+  if (db.settings && key in db.settings) {
+    delete db.settings[key];
+    await save();
+  }
+}
+
 export { db };

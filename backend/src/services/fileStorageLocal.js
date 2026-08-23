@@ -94,17 +94,24 @@ export function writeUploadedFiles(projectId, files) {
   return written;
 }
 
-// Resolve a file path: try direct, then with entry point subdir prefix
+// Resolve a file path: try direct, then with entry point subdir prefix.
+// SECURITY: every resolved path MUST stay inside the project directory —
+// `filePath` comes from user requests and may contain `..` segments; without
+// this guard a crafted path escapes the project dir (arbitrary read/write).
 function resolveFilePath(projectId, filePath) {
   const projectDir = getProjectDir(projectId);
-  const directPath = path.join(projectDir, filePath);
+  const rel = String(filePath || '').replace(/\\/g, '/').replace(/^\/+/, '');
+  if (!rel || rel.split('/').includes('..')) return null;
+
+  const directPath = path.resolve(projectDir, rel);
+  if (directPath !== projectDir && !directPath.startsWith(projectDir + path.sep)) return null;
   if (fs.existsSync(directPath)) return directPath;
 
   // Try with entry point subdir
   const entrySubdir = findEntryPoint(projectId);
   if (entrySubdir) {
-    const subPath = path.join(projectDir, entrySubdir, filePath);
-    if (fs.existsSync(subPath)) return subPath;
+    const subPath = path.resolve(projectDir, entrySubdir, rel);
+    if (subPath.startsWith(projectDir + path.sep) && fs.existsSync(subPath)) return subPath;
   }
 
   return null;
@@ -141,12 +148,15 @@ export function writeFileContent(projectId, filePath, content) {
     fs.writeFileSync(existingPath, content, 'utf-8');
     return true;
   }
-  // New file: write to entry point subdir or root
+  // New file: write to entry point subdir or root.
+  // SECURITY: same traversal guard as resolveFilePath — the resolved path
+  // must stay inside the project directory.
+  const rel = String(filePath || '').replace(/\\/g, '/').replace(/^\/+/, '');
+  if (!rel || rel.split('/').includes('..')) return false;
   const projectDir = getProjectDir(projectId);
   const entrySubdir = findEntryPoint(projectId);
-  const fullPath = entrySubdir
-    ? path.join(projectDir, entrySubdir, filePath)
-    : path.join(projectDir, filePath);
+  const fullPath = path.resolve(projectDir, entrySubdir || '', rel);
+  if (!fullPath.startsWith(projectDir + path.sep)) return false;
   fs.mkdirSync(path.dirname(fullPath), { recursive: true });
   fs.writeFileSync(fullPath, content, 'utf-8');
   return true;

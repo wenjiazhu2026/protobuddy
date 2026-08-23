@@ -1,13 +1,19 @@
 import { Router } from 'express';
 import multer from 'multer';
-import { getAll, getById, insert, update, remove, query } from '../db.js';
+import { getAll, getById, insert, update, remove, query, removeSetting } from '../db.js';
 import { unzipToProject, writeUploadedFiles, clearProjectFiles, ensureProjectDir, getFileSize, removeProjectFiles } from '../services/fileStorage.js';
 import { requireOwnerAuth } from '../services/ownerAuth.js';
 
 const router = Router();
+// Upload limits: memoryStorage buffers every file in RAM, so the limits bound
+// worst-case memory usage per request (previously 500 × 50MB = 25GB → instant
+// OOM). Prototype uploads need far less: 25MB per file, 200 files, 150MB total.
+const UPLOAD_FILE_SIZE = parseInt(process.env.UPLOAD_FILE_SIZE_MB || '', 10) * 1024 * 1024 || 25 * 1024 * 1024;
+const UPLOAD_MAX_FILES = parseInt(process.env.UPLOAD_MAX_FILES || '', 10) || 200;
+const UPLOAD_TOTAL_BYTES = parseInt(process.env.UPLOAD_TOTAL_MB || '', 10) * 1024 * 1024 || 150 * 1024 * 1024;
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 50 * 1024 * 1024, files: 500 }
+  limits: { fileSize: UPLOAD_FILE_SIZE, files: UPLOAD_MAX_FILES }
 });
 
 // List all projects
@@ -91,17 +97,17 @@ router.delete('/:id', requireOwnerAuth, async (req, res) => {
   if (!project) return res.status(404).json({ error: 'Project not found' });
 
   await remove('projects', req.params.id);
-  // Clean up related data
-  const fileRecs = await query('files', f => String(f.project_id) === String(req.params.id));
-  for (const f of fileRecs) await remove('files', f.id);
-  const depRecs = await query('deployments', d => String(d.project_id) === String(req.params.id));
-  for (const d of depRecs) await remove('deployments', d.id);
-  const annRecs = await query('annotations', a => String(a.project_id) === String(req.params.id));
-  for (const a of annRecs) await remove('annotations', a.id);
-  const planRecs = await query('plans', p => String(p.project_id) === String(req.params.id));
-  for (const p of planRecs) await remove('plans', p.id);
-  const taskRecs = await query('tasks', t => String(t.project_id) === String(req.params.id));
-  for (const t of taskRecs) await remove('tasks', t.id);
+  // Clean up ALL related data. planChanges/snapshots/ownerAuth carry
+  // project-scoped records (and gitlab settings may embed tokens), so leaving
+  // orphans behind is both a data-integrity and a security issue.
+  const relatedTables = ['files', 'deployments', 'annotations', 'plans', 'planChanges', 'snapshots', 'ownerAuth', 'tasks'];
+  for (const table of relatedTables) {
+    const recs = await query(table, r => String(r.project_id) === String(req.params.id));
+    for (const r of recs) await remove(table, r.id);
+  }
+  // Per-project settings keys (taskBreakdownConfig / gitlabConfig incl. token)
+  await removeSetting(`taskBreakdownConfig:${req.params.id}`);
+  await removeSetting(`gitlabConfig:${req.params.id}`);
 
   // Delete project files
   await removeProjectFiles(req.params.id);
@@ -117,7 +123,7 @@ router.delete('/:id', requireOwnerAuth, async (req, res) => {
  *   - html   : `file` field = single index.html (or any .html file, stored as index.html)
  */
 // Owner-gated: uploading a new prototype replaces existing files
-router.post('/:id/upload', requireOwnerAuth, upload.fields([{ name: 'file', maxCount: 1 }, { name: 'files', maxCount: 500 }]), async (req, res) => {
+router.post('/:id/upload', requireOwnerAuth, upload.fields([{ name: 'file', maxCount: 1 }, { name: 'files', maxCount: UPLOAD_MAX_FILES }]), async (req, res) => {
   const project = await getById('projects', req.params.id);
   if (!project) return res.status(404).json({ error: 'Project not found' });
 
@@ -127,6 +133,14 @@ router.post('/:id/upload', requireOwnerAuth, upload.fields([{ name: 'file', maxC
 
   if (!uploadedFile && uploadedFiles.length === 0) {
     return res.status(400).json({ error: 'No file uploaded' });
+  }
+
+  // Aggregate size guard (multer only limits per-file): bound total buffered
+  // bytes per request so a folder upload cannot balloon memory usage.
+  const totalBytes = [uploadedFile, ...uploadedFiles].filter(Boolean)
+    .reduce((s, f) => s + (f.size || 0), 0);
+  if (totalBytes > UPLOAD_TOTAL_BYTES) {
+    return res.status(413).json({ error: `上传总体积超过上限 ${Math.round(UPLOAD_TOTAL_BYTES / 1024 / 1024)}MB` });
   }
 
   try {

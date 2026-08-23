@@ -45,7 +45,12 @@ router.post('/:id/files', requireOwnerAuth, async (req, res) => {
   const { path: filePath, content } = req.body;
   if (!filePath) return res.status(400).json({ error: 'File path is required' });
 
-  await writeFileContent(req.params.id, filePath, content);
+  // writeFileContent returns false when the path is rejected (e.g. traversal
+  // guard) — do NOT record or report success for a write that never happened.
+  const written = await writeFileContent(req.params.id, filePath, content);
+  if (!written) {
+    return res.status(400).json({ error: '非法文件路径（拒绝写入）', path: filePath });
+  }
 
   // Upsert file record
   const existing = await query('files', f => String(f.project_id) === String(req.params.id) && f.path === filePath);

@@ -77,6 +77,10 @@ export function setSetting(key, value) {
   return driver().then(m => m.setSetting(key, value));
 }
 
+export function removeSetting(key) {
+  return driver().then(m => m.removeSetting(key));
+}
+
 export function getDbObject() {
   return driver().then(m => m.db);
 }

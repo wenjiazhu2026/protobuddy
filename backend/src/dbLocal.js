@@ -114,4 +114,12 @@ export function setSetting(key, value) {
   save();
 }
 
+export function removeSetting(key) {
+  const d = getDb();
+  if (d.settings && key in d.settings) {
+    delete d.settings[key];
+    save();
+  }
+}
+
 export { db };

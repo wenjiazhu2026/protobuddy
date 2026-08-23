@@ -4,10 +4,11 @@
  * Guards owner-level operations (project maintenance, file upload, prototype
  * deployment, plan review and plan apply). Design:
  *
- * 1. Configurable password  - read from env at call time (OWNER_PASSWORD), with
- *    a documented default fallback so the demo works out of the box. Real
- *    deployments should set OWNER_PASSWORD (and OWNER_AUTH_SECRET) in the
- *    platform environment, NOT by editing business code.
+ * 1. Configurable password  - read from env at call time (OWNER_PASSWORD /
+ *    OWNER_AUTH_SECRET). NO default fallback: when either variable is unset the
+ *    auth layer fails CLOSED (password check and token issue/verify all fail
+ *    with OWNER_AUTH_NOT_CONFIGURED). This is deliberate — a hardcoded default
+ *    password/secret ships with the source bundle and is effectively public.
  * 2. One-time verification - after a successful password check the server
  *    issues an HMAC-signed token (payload + expiry). The frontend keeps it in
  *    sessionStorage and attaches it to subsequent protected calls. Stateless
@@ -18,15 +19,10 @@
  *    persisted in the `ownerAuth` table (works across instances). After
  *    OWNER_AUTH_MAX_ATTEMPTS failures the project is locked for
  *    OWNER_AUTH_LOCK_MS; even a correct password is rejected while locked.
- * 4. Role scoping          - only the owner role is gated. If a request carries
- *    X-Role with a non-owner value (e.g. "reviewer"), the check is skipped so a
- *    future multi-role system can let other roles keep their existing behavior.
  */
 import crypto from 'crypto';
 import { getById, query, insert, update } from '../db.js';
 
-const DEFAULT_PASSWORD = 'gugugaga2026';
-const DEFAULT_SECRET = 'protobuddy-owner-auth-secret';
 const DEFAULT_TTL_MS = 8 * 60 * 60 * 1000;        // session validity: 8h
 const DEFAULT_MAX_ATTEMPTS = 5;                    // consecutive failures before lock
 const DEFAULT_LOCK_MS = 5 * 60 * 1000;             // lock duration: 5min
@@ -34,12 +30,18 @@ const DEFAULT_LOCK_MS = 5 * 60 * 1000;             // lock duration: 5min
 /** Read config lazily so env set by the Makers entry (or the platform) is honored. */
 export function getOwnerConfig() {
   return {
-    password: process.env.OWNER_PASSWORD || DEFAULT_PASSWORD,
-    secret: process.env.OWNER_AUTH_SECRET || DEFAULT_SECRET,
+    password: process.env.OWNER_PASSWORD || '',
+    secret: process.env.OWNER_AUTH_SECRET || '',
     ttlMs: parseInt(process.env.OWNER_AUTH_TTL_MS || '', 10) || DEFAULT_TTL_MS,
     maxAttempts: parseInt(process.env.OWNER_AUTH_MAX_ATTEMPTS || '', 10) || DEFAULT_MAX_ATTEMPTS,
     lockMs: parseInt(process.env.OWNER_AUTH_LOCK_MS || '', 10) || DEFAULT_LOCK_MS
   };
+}
+
+/** True when owner auth is usable (both password and signing secret configured). */
+export function isOwnerAuthConfigured() {
+  const cfg = getOwnerConfig();
+  return Boolean(cfg.password && cfg.secret && cfg.secret.length >= 16);
 }
 
 function safeEqual(a, b) {
@@ -52,10 +54,12 @@ function safeEqual(a, b) {
 /* ---------------------------------- tokens --------------------------------- */
 
 function sign(payloadB64) {
-  return crypto.createHmac('sha256', getOwnerConfig().secret).update(payloadB64).digest('hex');
+  const secret = getOwnerConfig().secret;
+  if (!secret) throw new Error('OWNER_AUTH_SECRET not configured');
+  return crypto.createHmac('sha256', secret).update(payloadB64).digest('hex');
 }
 
-/** Issue a signed session token for a project. */
+/** Issue a signed session token for a project. Throws when not configured. */
 export function issueToken(projectId) {
   const payload = { p: String(projectId), e: Date.now() + getOwnerConfig().ttlMs };
   const b64 = Buffer.from(JSON.stringify(payload)).toString('base64url');
@@ -64,6 +68,8 @@ export function issueToken(projectId) {
 
 /** Verify a signed session token: signature, project match and expiry. */
 export function verifyOwnerToken(projectId, token) {
+  // Fail closed: without a configured secret no token can ever verify.
+  if (!getOwnerConfig().secret) return false;
   if (!token || typeof token !== 'string') return false;
   const parts = token.split('.');
   if (parts.length !== 3 || parts[0] !== 'v1') return false;
@@ -115,6 +121,18 @@ export async function getLockInfo(projectId) {
  */
 export async function verifyOwnerPassword(projectId, password) {
   const cfg = getOwnerConfig();
+
+  // Fail closed: without OWNER_PASSWORD / OWNER_AUTH_SECRET no password can
+  // succeed and no token can be issued. Operators must set both env vars on
+  // the platform (never a default baked into source).
+  if (!cfg.password || !cfg.secret) {
+    return {
+      ok: false,
+      error: 'OWNER_AUTH_NOT_CONFIGURED',
+      message: 'Owner 认证未配置：请在平台环境变量中设置 OWNER_PASSWORD 与 OWNER_AUTH_SECRET'
+    };
+  }
+
   const state = await getAuthState(projectId);
   const now = Date.now();
 
@@ -184,12 +202,11 @@ export async function resolveProjectId(req) {
  */
 export async function requireOwnerAuth(req, res, next) {
   try {
-    // Role scoping: only the owner role is gated. A future role system can
-    // send X-Role: reviewer (or any non-owner role) to bypass this check and
-    // keep its original permission behavior.
-    const role = req.headers['x-role'];
-    if (role && String(role).toLowerCase() !== 'owner') return next();
-
+    // SECURITY: every request to an owner-gated endpoint must present a valid
+    // owner token (obtained via password verification). There is deliberately
+    // NO role-based short-circuit here — an earlier implementation allowed any
+    // request with a non-owner X-Role header to skip this check entirely,
+    // which let anonymous callers bypass owner auth with a single header.
     const projectId = await resolveProjectId(req);
     if (!projectId) return res.status(404).json({ error: 'Project not found' });
 

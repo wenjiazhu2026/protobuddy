@@ -9,6 +9,24 @@ import { requireOwnerAuth } from '../services/ownerAuth.js';
 
 const router = Router();
 
+// ---- Plan generation rate limit -------------------------------------------
+// POST /:id/plan triggers a paid Makers Models call. It is intentionally open
+// to reviewers (not owner-gated), so an in-memory per-project limiter keeps a
+// single anonymous caller from burning the API quota. Window/slots tunable
+// via env; per-instance only (serverless), which still bounds the burn rate.
+const PLAN_RATE_LIMIT = parseInt(process.env.PLAN_RATE_LIMIT || '', 10) || 6;
+const PLAN_RATE_WINDOW_MS = parseInt(process.env.PLAN_RATE_WINDOW_MS || '', 10) || 10 * 60 * 1000;
+const planRateHits = new Map(); // projectId -> timestamp[]
+function planRateLimited(projectId) {
+  const key = String(projectId);
+  const now = Date.now();
+  const hits = (planRateHits.get(key) || []).filter(t => now - t < PLAN_RATE_WINDOW_MS);
+  planRateHits.set(key, hits);
+  if (hits.length >= PLAN_RATE_LIMIT) return true;
+  hits.push(now);
+  return false;
+}
+
 // ---- Batch generation helpers ---------------------------------------------
 // When a plan request carries many annotations, packing ALL of them plus the
 // relevant file context into a single prompt can overflow the input budget and
@@ -118,8 +136,11 @@ async function triggerRedeploy(plan, req, logLine, changes = []) {
       deployResult = await deployToEdgeOne(project);
       let previewUrl = deployResult.url;
       if (deployResult.method === 'local' || deployResult.method === 'cloud_preview' || !previewUrl) {
-        const baseUrl = `${req.protocol}://${req.get('host')}`;
-        previewUrl = `${baseUrl}/api/projects/${plan.project_id}/preview/`;
+        // RELATIVE path only: serverless runtimes report internal/loopback
+        // hostnames in req.get('host') (same fix as deploy.js), which produced
+        // broken preview URLs when stored in the deployments table. The browser
+        // resolves the relative path against the current origin.
+        previewUrl = `/api/projects/${plan.project_id}/preview/`;
       }
       const version = (project.version || 0) + 1;
       await insert('deployments', {
@@ -169,6 +190,14 @@ router.post('/:id/plan', async (req, res) => {
   const fnStartTime = Date.now();
   const project = await getById('projects', req.params.id);
   if (!project) return res.status(404).json({ error: 'Project not found' });
+
+  // Rate limit: plan generation calls a paid LLM API per request.
+  if (planRateLimited(req.params.id)) {
+    return res.status(429).json({
+      error: 'PLAN_RATE_LIMITED',
+      message: `方案生成过于频繁（每 ${Math.round(PLAN_RATE_WINDOW_MS / 60000)} 分钟最多 ${PLAN_RATE_LIMIT} 次），请稍后再试`
+    });
+  }
 
   // Get open annotations
   const annotations = await query('annotations', a =>

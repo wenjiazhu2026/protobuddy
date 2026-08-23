@@ -18,6 +18,10 @@ data
 # Workspace metadata
 .workbuddy
 
+# Security audit / review reports (contain vulnerability details - never upload)
+.gstack
+deliverables
+
 # Environment files (secrets)
 .env
 .env.local

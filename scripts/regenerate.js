@@ -28,11 +28,12 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { isGeneratorFile, snapshotProject, diffSnapshots } from '../backend/src/services/generator.js';
 
-const execAsync = promisify(exec);
+// execFile（不经 shell）：脚本路径作为单个 argv 传入，杜绝命令注入。
+const execFileAsync = promisify(execFile);
 const GENERATOR_TIMEOUT_MS = 120000;
 
 const BINARY_EXTS = ['.png', '.jpg', '.jpeg', '.gif', '.ico', '.webp', '.svg', '.woff', '.woff2', '.ttf', '.eot', '.otf', '.mp4', '.mp3', '.pdf', '.zip', '.rar'];
@@ -242,13 +243,17 @@ function findGenerator(workdir) {
 }
 
 async function runGenerator(workdir, script) {
-  const scriptPath = path.join(workdir, script);
+  const scriptPath = path.resolve(workdir, String(script || ''));
+  // 路径边界守卫：脚本必须位于工作目录内（防 ../ 逃逸执行任意文件）。
+  if (!scriptPath.startsWith(path.resolve(workdir) + path.sep)) {
+    throw new Error(`生成器脚本路径越界: ${script}`);
+  }
   const scriptDir = path.dirname(scriptPath);
   if (!fs.existsSync(scriptPath)) throw new Error(`生成器脚本不存在: ${script}`);
   console.log(`[regenerate] 执行: python3 ${script} (cwd=${path.relative(workdir, scriptDir) || '.'})`);
 
   const python = process.env.GENERATOR_PYTHON || 'python3';
-  const { stdout, stderr } = await execAsync(`"${python}" "${scriptPath}"`, {
+  const { stdout, stderr } = await execFileAsync(python, [scriptPath], {
     cwd: scriptDir,
     timeout: GENERATOR_TIMEOUT_MS,
     maxBuffer: 1024 * 1024 * 10,

@@ -1,4 +1,4 @@
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
 import path from 'path';
 import fs from 'fs';
@@ -6,10 +6,21 @@ import { getProjectDir, findEntryPoint, listProjectFiles, readFileContent } from
 import { isBlobMode } from '../config.js';
 import { uploadAndDeploy, pollDeployment, getProjectUrl } from './makersApi.js';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 const DEPLOY_TIMEOUT = 180000; // 180s (first npx download of edgeone CLI can be slow)
 const CLOUD_POLL_BUDGET_MS = 45000; // inline poll budget inside one function invocation
+
+// EdgeOne Pages project names only allow a limited charset. This doubles as
+// shell-metacharacter defense-in-depth: even though deployToEdgeOne now uses
+// execFile (no shell), the name originates from a user-controlled project
+// field, so it is validated before reaching any subprocess or API payload.
+const PROJECT_NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,62}$/;
+
+function safeProjectName(name, fallback) {
+  const n = String(name || '').trim();
+  return PROJECT_NAME_RE.test(n) ? n : fallback;
+}
 
 // Remove ANSI escape sequences (colors, cursor moves, etc.)
 function stripAnsi(str) {
@@ -82,7 +93,8 @@ export async function deployToEdgeOne(project) {
     }
     try {
       console.log(`[edgeone] Deploying project ${project.id} to EdgeOne Makers via Pages API...`);
-      const projectName = project.edgeone_project_name || `proto-${project.slug || project.id}`;
+      // Validate the name (user-controlled) before it reaches the API payload.
+      const projectName = safeProjectName(project.edgeone_project_name, `proto-${project.slug || project.id}`);
       const files = await collectCloudFiles(project.id);
       if (files.length === 0) {
         return { success: false, url: '', method: 'none', error: 'Project has no files. Upload prototype files first.' };
@@ -146,10 +158,14 @@ export async function deployToEdgeOne(project) {
     try {
       console.log(`[edgeone] Deploying project ${project.id} to EdgeOne Makers...`);
 
-      const projectName = project.edgeone_project_name || `proto-${project.slug || project.id}`;
+      // Validate the name (user-controlled) against a safe charset, then run
+      // the CLI with execFile + an argument array — NO shell interpolation, so
+      // a crafted project name can never break out into command execution.
+      const projectName = safeProjectName(project.edgeone_project_name, `proto-${project.slug || project.id}`);
 
-      const { stdout, stderr } = await execAsync(
-        `npx --yes edgeone makers deploy . -n "${projectName}" -t "${project.edgeone_token}" -e production`,
+      const { stdout, stderr } = await execFileAsync(
+        'npx',
+        ['--yes', 'edgeone', 'makers', 'deploy', '.', '-n', projectName, '-t', project.edgeone_token, '-e', 'production'],
         {
           cwd: deployDir,
           timeout: DEPLOY_TIMEOUT,

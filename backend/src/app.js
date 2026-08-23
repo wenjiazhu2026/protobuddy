@@ -87,10 +87,25 @@ export function createApp({ makersPrefix } = {}) {
     });
   }
 
-  // Middleware
-  app.use(cors());
-  app.use(express.json({ limit: '50mb' }));
-  app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+  // CORS: allow-list based. The production frontend is served same-origin
+  // (static build behind the same app / same EdgeOne domain), so cross-origin
+  // access is only needed for local development (Vite dev server). Tighten or
+  // widen via CORS_ORIGINS (comma-separated; '*' reopens everything).
+  const corsOrigins = (process.env.CORS_ORIGINS || 'http://localhost:5173,http://127.0.0.1:5173')
+    .split(',').map(s => s.trim()).filter(Boolean);
+  const allowAll = corsOrigins.includes('*');
+  app.use(cors({
+    origin(origin, cb) {
+      // No Origin header = same-origin request, curl, or server-to-server call.
+      if (!origin || allowAll || corsOrigins.includes(origin)) return cb(null, true);
+      return cb(null, false); // not a listed origin: no CORS headers -> browser blocks
+    }
+  }));
+  // Total request-body ceiling (kept large enough for base64 file writes via
+  // POST /api/projects/:id/files; tune via BODY_LIMIT env if desired).
+  const BODY_LIMIT = process.env.BODY_LIMIT || '50mb';
+  app.use(express.json({ limit: BODY_LIMIT }));
+  app.use(express.urlencoded({ extended: true, limit: BODY_LIMIT }));
 
   // Health check
   app.get('/api/health', (req, res) => {

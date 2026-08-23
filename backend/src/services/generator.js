@@ -20,12 +20,14 @@
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { listProjectFiles, getProjectDir, readFileContent } from './fileStorage.js';
 import { isBlobMode } from '../config.js';
 
-const execAsync = promisify(exec);
+// execFile（不经 shell）+ 参数数组：脚本路径作为单个 argv 传入，任何特殊字符
+// 都不可能被解释为 shell 元字符（此前的 exec 模板字符串拼接存在命令注入风险）。
+const execFileAsync = promisify(execFile);
 
 /** 生成器脚本识别规则（相对路径 basename 匹配）。 */
 const GENERATOR_PATTERNS = [
@@ -164,7 +166,11 @@ function resolvePython() {
  */
 export async function runGeneratorLocal(projectId, script) {
   const projectDir = await getProjectDir(projectId);
-  const scriptPath = path.join(projectDir, script);
+  const scriptPath = path.resolve(projectDir, String(script || ''));
+  // 路径边界守卫：脚本必须位于项目目录内（防 ../ 逃逸执行任意文件）。
+  if (!scriptPath.startsWith(projectDir + path.sep)) {
+    return { ok: false, error: `生成器脚本路径越界: ${script}` };
+  }
   if (!fs.existsSync(scriptPath)) {
     return { ok: false, error: `生成器脚本不存在: ${script}` };
   }
@@ -177,7 +183,7 @@ export async function runGeneratorLocal(projectId, script) {
   let stderr = '';
   let exitCode = 0;
   try {
-    const res = await execAsync(`"${resolvePython()}" "${scriptPath}"`, {
+    const res = await execFileAsync(resolvePython(), [scriptPath], {
       cwd: scriptDir,
       timeout: GENERATOR_TIMEOUT_MS,
       maxBuffer: 1024 * 1024 * 10,
@@ -267,7 +273,7 @@ export async function probeGeneratorEnv() {
     return { mode: 'blob', canExecPython: false, reason: 'Cloud Function read-only filesystem' };
   }
   try {
-    const { stdout } = await execAsync(`"${resolvePython()}" --version`, { timeout: 10000 });
+    const { stdout } = await execFileAsync(resolvePython(), ['--version'], { timeout: 10000 });
     return { mode: 'local', canExecPython: true, python: (stdout || '').trim() };
   } catch (err) {
     return { mode: 'local', canExecPython: false, error: err.message };
