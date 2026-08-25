@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { getById, query, insert, update, remove } from '../db.js';
+import { requireOwnerAuth } from '../services/ownerAuth.js';
 
 const router = Router();
 
@@ -54,8 +55,10 @@ router.post('/:id/annotations', async (req, res) => {
   res.status(201).json(ann);
 });
 
-// Update annotation (e.g., resolve/reopen)
-router.put('/:id/annotations/:annId', async (req, res) => {
+// Update annotation (e.g., resolve/reopen) — owner operation: only the
+// project owner can resolve/reopen or edit annotation content, preventing
+// unauthorized reviewers from tampering with others' annotations.
+router.put('/:id/annotations/:annId', requireOwnerAuth, async (req, res) => {
   const ann = await getById('annotations', req.params.annId);
   if (!ann || String(ann.project_id) !== String(req.params.id)) {
     return res.status(404).json({ error: 'Annotation not found' });
@@ -70,8 +73,9 @@ router.put('/:id/annotations/:annId', async (req, res) => {
   res.json(updated);
 });
 
-// Delete annotation
-router.delete('/:id/annotations/:annId', async (req, res) => {
+// Delete annotation — owner operation: prevents unauthorized deletion of
+// other reviewers' annotations (IDOR fix).
+router.delete('/:id/annotations/:annId', requireOwnerAuth, async (req, res) => {
   const ann = await getById('annotations', req.params.annId);
   if (!ann || String(ann.project_id) !== String(req.params.id)) {
     return res.status(404).json({ error: 'Annotation not found' });

@@ -1,5 +1,6 @@
 import express from 'express';
 import cors from 'cors';
+import helmet from 'helmet';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
@@ -106,6 +107,32 @@ export function createApp({ makersPrefix } = {}) {
   const BODY_LIMIT = process.env.BODY_LIMIT || '50mb';
   app.use(express.json({ limit: BODY_LIMIT }));
   app.use(express.urlencoded({ extended: true, limit: BODY_LIMIT }));
+
+  // Security headers via helmet. Configured to allow the app's own patterns:
+  //   - frameSrc 'self': the preview iframe loads same-origin prototype HTML
+  //   - scriptSrc 'self' 'unsafe-inline': prototype HTML often has inline JS
+  //   - styleSrc 'self' 'unsafe-inline': React inline styles + prototype CSS
+  //   - imgSrc *: prototype assets may load from any origin
+  // X-Frame-Options SAMEORIGIN prevents external sites from embedding the app
+  // (clickjacking), while still allowing the app's own preview iframe.
+  app.use(helmet({
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        scriptSrc: ["'self'", "'unsafe-inline'"],
+        styleSrc: ["'self'", "'unsafe-inline'"],
+        imgSrc: ["'self'", 'data:', 'https:', 'http:'],
+        fontSrc: ["'self'", 'data:'],
+        frameSrc: ["'self'"],
+        connectSrc: ["'self'"],
+        objectSrc: ["'none'"],
+        baseUri: ["'self'"],
+        formAction: ["'self'"]
+      }
+    },
+    crossOriginEmbedderPolicy: false, // prototype HTML may load cross-origin assets
+    crossOriginResourcePolicy: { policy: 'cross-origin' } // preview assets served to iframe
+  }));
 
   // Health check
   app.get('/api/health', (req, res) => {

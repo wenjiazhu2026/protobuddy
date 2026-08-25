@@ -192,8 +192,9 @@ router.post('/:id/preview-url', requireOwnerAuth, async (req, res) => {
   res.json({ success: true, url, deployment_id: deployment.id });
 });
 
-// Diagnostic: list all custom domains bound to the project in EdgeOne
-router.get('/:id/domains', async (req, res) => {
+// Diagnostic: list all custom domains bound to the project in EdgeOne — owner
+// operation (exposes project ID and domain configuration from the EdgeOne API)
+router.get('/:id/domains', requireOwnerAuth, async (req, res) => {
   const project = await getById('projects', req.params.id);
   if (!project) return res.status(404).json({ error: 'Project not found' });
   if (!project.edgeone_token) return res.json({ error: 'No EdgeOne token configured' });

@@ -22,6 +22,28 @@ function getStoreInstance() {
   return storePromise;
 }
 
+/**
+ * Write mutex: serializes all mutations so concurrent requests (e.g. two
+ * insert() calls racing inside the same serverless instance) can't corrupt
+ * the read-modify-write cycle. Without this, request A reads the DB, request
+ * B reads the same snapshot, both append their record and save — the second
+ * save silently clobbers the first.
+ *
+ * The lock is a promise chain: each acquirer awaits the previous holder before
+ * proceeding. In a serverless environment where each instance runs in a single
+ * Node.js process, this is sufficient to prevent in-instance races. Cross-
+ * instance races are handled by Blob strong-consistency reads (ensureLoaded
+ * reloads before every operation).
+ */
+let writeChain = Promise.resolve();
+function withWriteLock(fn) {
+  const run = writeChain.then(fn, fn); // run on success or failure of prev
+  // Keep the chain alive even if this holder's function throws — otherwise
+  // a single rejection would break the lock for all subsequent writers.
+  writeChain = run.then(() => {}, () => {});
+  return run;
+}
+
 const defaultDB = {
   projects: [],
   files: [],
@@ -72,10 +94,12 @@ async function save() {
 }
 
 export async function nextId() {
-  await ensureLoaded();
-  db._seq = (db._seq || 0) + 1;
-  await save();
-  return db._seq;
+  return withWriteLock(async () => {
+    await ensureLoaded();
+    db._seq = (db._seq || 0) + 1;
+    await save();
+    return db._seq;
+  });
 }
 
 export async function getAll(table) {
@@ -90,34 +114,38 @@ export async function getById(table, id) {
 }
 
 export async function insert(table, record) {
-  await ensureLoaded();
-  if (!db[table]) db[table] = [];
-  // NOTE: do NOT call nextId() here — it re-runs ensureLoaded() which reloads
-  // the whole DB document from Blob, wiping out the freshly-created table above
-  // (a new table like `ownerAuth` does not exist in Blob yet, so after the
-  // reload db[table] is undefined again and the push below throws
-  // "Cannot read properties of undefined (reading 'push')"). Generate the id
-  // inline against the already-loaded in-memory document instead.
-  let id = record.id;
-  if (!id) {
-    db._seq = (db._seq || 0) + 1;
-    id = db._seq;
-  }
-  const now = new Date().toISOString();
-  const full = { id, created_at: now, updated_at: now, ...record, id };
-  db[table].push(full);
-  await save();
-  return full;
+  return withWriteLock(async () => {
+    await ensureLoaded();
+    if (!db[table]) db[table] = [];
+    // NOTE: do NOT call nextId() here — it re-runs ensureLoaded() which reloads
+    // the whole DB document from Blob, wiping out the freshly-created table above
+    // (a new table like `ownerAuth` does not exist in Blob yet, so after the
+    // reload db[table] is undefined again and the push below throws
+    // "Cannot read properties of undefined (reading 'push')"). Generate the id
+    // inline against the already-loaded in-memory document instead.
+    let id = record.id;
+    if (!id) {
+      db._seq = (db._seq || 0) + 1;
+      id = db._seq;
+    }
+    const now = new Date().toISOString();
+    const full = { id, created_at: now, updated_at: now, ...record, id };
+    db[table].push(full);
+    await save();
+    return full;
+  });
 }
 
 export async function update(table, id, patch) {
-  await ensureLoaded();
-  const list = db[table] || [];
-  const idx = list.findIndex(r => String(r.id) === String(id));
-  if (idx === -1) return null;
-  list[idx] = { ...list[idx], ...patch, updated_at: new Date().toISOString() };
-  await save();
-  return list[idx];
+  return withWriteLock(async () => {
+    await ensureLoaded();
+    const list = db[table] || [];
+    const idx = list.findIndex(r => String(r.id) === String(id));
+    if (idx === -1) return null;
+    list[idx] = { ...list[idx], ...patch, updated_at: new Date().toISOString() };
+    await save();
+    return list[idx];
+  });
 }
 
 export async function remove(table, id) {

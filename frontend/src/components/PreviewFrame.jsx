@@ -71,6 +71,11 @@ function PreviewFrame({ projectId, version, annotateMode, onAnnotate, annotation
   // Construct preview URL - use relative path so it works in both dev and prod
   const previewUrl = `${API_BASE}/projects/${projectId}/preview/`;
 
+  // Security: only accept postMessage from the same origin (the preview iframe
+  // is same-origin, served by this app). Prevents malicious pages loaded into
+  // the iframe from sending spoofed scroll/position data.
+  const allowedOrigin = typeof window !== 'undefined' ? window.location.origin : '';
+
   // Reload iframe when version changes, reset scroll offset and cached positions
   useEffect(() => {
     setIframeKey(k => k + 1);
@@ -112,12 +117,12 @@ function PreviewFrame({ projectId, version, annotateMode, onAnnotate, annotation
 
     targets.forEach(t => {
       try {
-        win.postMessage(t, '*');
+        win.postMessage(t, allowedOrigin);
       } catch (_) {
         // iframe may have navigated away; ignore
       }
     });
-  }, [visibleAnnotations]);
+  }, [visibleAnnotations, allowedOrigin]);
 
   // Throttle element position queries so rapid scroll events don't flood the iframe.
   const scheduleElementQuery = useCallback(() => {
@@ -135,6 +140,10 @@ function PreviewFrame({ projectId, version, annotateMode, onAnnotate, annotation
   // Listen for scroll position reports, page-navigation reports, element
   // probe responses, and element position query responses from the iframe.
   const handleScrollMessage = useCallback((e) => {
+    // Security: reject messages from unexpected origins. The preview iframe
+    // is same-origin; any other origin is either a cross-origin page that
+    // somehow got loaded into the iframe or an attacker.
+    if (allowedOrigin && e.origin !== allowedOrigin) return;
     const d = e.data;
     if (!d) return;
     if (d.__protoScroll) {
@@ -166,7 +175,7 @@ function PreviewFrame({ projectId, version, annotateMode, onAnnotate, annotation
       // store latest bounding rect for this annotation's anchor element
       setElementPositions(prev => ({ ...prev, [d.id]: d.found ? d : null }));
     }
-  }, [onPageChange, scheduleElementQuery]);
+  }, [onPageChange, scheduleElementQuery, allowedOrigin]);
 
   useEffect(() => {
     window.addEventListener('message', handleScrollMessage);
@@ -254,7 +263,7 @@ function PreviewFrame({ projectId, version, annotateMode, onAnnotate, annotation
     try {
       iframeRef.current?.contentWindow?.postMessage(
         { __protoProbe: 1, id: probeId, x: viewportX, y: viewportY },
-        '*'
+        allowedOrigin
       );
     } catch (_) {
       // iframe not ready or cross-origin blocked; ignore and fall back to coordinates only
