@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
-import { api } from '../api.js';
+import { api, getOwnerToken } from '../api.js';
 import PreviewFrame from '../components/PreviewFrame.jsx';
 import AnnotationLayer from '../components/AnnotationLayer.jsx';
 import { useToast } from '../components/ToastContext.jsx';
+import { useOwnerAuth } from '../components/OwnerAuthContext.jsx';
 
 export default function Review() {
   const { id } = useParams();
@@ -18,6 +19,7 @@ export default function Review() {
   const [latestPlan, setLatestPlan] = useState(null);
   const [currentPage, setCurrentPage] = useState('index.html');
   const { showToast } = useToast();
+  const { guard } = useOwnerAuth();
   const [taskCount, setTaskCount] = useState(null);
   const [panelOpen, setPanelOpen] = useState(() => {
     try { return localStorage.getItem('protobuddy.review.panel.open') !== 'false'; } catch { return true; }
@@ -70,7 +72,7 @@ export default function Review() {
 
   const handleResolve = async (annId) => {
     try {
-      await api.updateAnnotation(id, annId, { status: 'resolved' });
+      await guard(id, () => api.updateAnnotation(id, annId, { status: 'resolved' }, getOwnerToken(id)));
       setAnnotations(annotations.map(a => a.id === annId ? { ...a, status: 'resolved' } : a));
       showToast('已标记为已解决');
     } catch (err) {
@@ -80,7 +82,7 @@ export default function Review() {
 
   const handleReject = async (annId) => {
     try {
-      await api.updateAnnotation(id, annId, { status: 'rejected' });
+      await guard(id, () => api.updateAnnotation(id, annId, { status: 'rejected' }, getOwnerToken(id)));
       setAnnotations(annotations.map(a => a.id === annId ? { ...a, status: 'rejected' } : a));
       showToast('已标记为不采纳');
     } catch (err) {
@@ -90,7 +92,7 @@ export default function Review() {
 
   const handleReopen = async (annId) => {
     try {
-      await api.updateAnnotation(id, annId, { status: 'open' });
+      await guard(id, () => api.updateAnnotation(id, annId, { status: 'open' }, getOwnerToken(id)));
       setAnnotations(annotations.map(a => a.id === annId ? { ...a, status: 'open' } : a));
       showToast('已重新打开');
     } catch (err) {
@@ -101,7 +103,7 @@ export default function Review() {
   const handleDelete = async (annId) => {
     if (!confirm('确定删除此批注？')) return;
     try {
-      await api.deleteAnnotation(id, annId);
+      await guard(id, () => api.deleteAnnotation(id, annId, getOwnerToken(id)));
       setAnnotations(annotations.filter(a => a.id !== annId));
       showToast('批注已删除');
     } catch (err) {
@@ -109,15 +111,34 @@ export default function Review() {
     }
   };
 
-  const handleGeneratePlan = async () => {
+  const handleGeneratePlan = async (opts = {}) => {
+    if (generating) return;
     setGenerating(true);
     try {
-      const plan = await api.generatePlan(id);
+      const plan = await api.generatePlan(id, opts);
       setLatestPlan(plan);
       showToast(`方案已生成: ${plan.changes?.length || 0} 条修改建议 (${plan.method === 'makers' ? 'Makers Models' : '规则引擎'})`);
       navigate(`/project/${id}/plan`);
     } catch (err) {
-      showToast('生成方案失败: ' + err.message, 'error');
+      // 409: open annotations already covered by an unfinished plan. Offer an
+      // explicit force-regenerate instead of silently stacking duplicate plans.
+      if (err.code === 'PLAN_ALREADY_EXISTS') {
+        if (window.confirm(`${err.message}\n\n是否强制重新生成？（原方案仍保留，可手动驳回）`)) {
+          try {
+            const plan = await api.generatePlan(id, { force: true });
+            setLatestPlan(plan);
+            showToast(`方案已强制重新生成: ${plan.changes?.length || 0} 条修改建议`);
+            navigate(`/project/${id}/plan`);
+            return;
+          } catch (err2) {
+            showToast('生成方案失败: ' + err2.message, 'error');
+            return;
+          }
+        }
+        showToast('已取消：请先在方案页处理已有方案', 'info');
+      } else {
+        showToast('生成方案失败: ' + err.message, 'error');
+      }
     } finally {
       setGenerating(false);
     }

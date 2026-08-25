@@ -27,6 +27,23 @@ function planRateLimited(projectId) {
   return false;
 }
 
+// ---- In-flight generation lock ------------------------------------------------
+// Double-clicks / concurrent callers used to fire TWO paid generations for the
+// same project, each producing a plan over the same open annotations (the
+// "duplicate plans under one annotation" bug). The frontend disables the
+// button, but that is a race-prone client-side guard only. Server-side: one
+// generation per project at a time; entries self-expire after 120s (CF limit)
+// and are cleared on response finish as a safety net.
+const PLAN_GEN_INFLIGHT_TTL_MS = 120000;
+const planGenInFlight = new Map(); // projectId -> startedAt
+function acquirePlanGenLock(projectId) {
+  const key = String(projectId);
+  const startedAt = planGenInFlight.get(key);
+  if (startedAt && Date.now() - startedAt < PLAN_GEN_INFLIGHT_TTL_MS) return false;
+  planGenInFlight.set(key, Date.now());
+  return true;
+}
+
 // ---- Batch generation helpers ---------------------------------------------
 // When a plan request carries many annotations, packing ALL of them plus the
 // relevant file context into a single prompt can overflow the input budget and
@@ -199,6 +216,16 @@ router.post('/:id/plan', async (req, res) => {
     });
   }
 
+  // In-flight lock: reject concurrent generation for the same project (double
+  // click / retry storm). Cleared when this response finishes.
+  if (!acquirePlanGenLock(req.params.id)) {
+    return res.status(409).json({
+      error: 'PLAN_GENERATION_IN_PROGRESS',
+      message: '该项目的方案正在生成中，请等待当前生成完成后再试（勿重复点击）。'
+    });
+  }
+  res.on('finish', () => planGenInFlight.delete(String(req.params.id)));
+
   // Get open annotations
   const annotations = await query('annotations', a =>
     String(a.project_id) === String(req.params.id) && a.status === 'open'
@@ -206,6 +233,33 @@ router.post('/:id/plan', async (req, res) => {
 
   if (annotations.length === 0) {
     return res.status(400).json({ error: 'No open annotations to generate plan from' });
+  }
+
+  // ---- Duplicate-plan guard (idempotency) ---------------------------------
+  // Every POST packages ALL open annotations into a NEW plan. Without this
+  // guard, any repeat click / retry created ANOTHER plan covering the same
+  // annotations — the "multiple duplicate plans under one annotation" bug.
+  // If an unfinished plan (draft/approved) already covers any of the currently
+  // open annotations, refuse with 409 unless ?force=1.
+  if (req.query.force !== '1') {
+    const unfinished = await query('plans', p =>
+      String(p.project_id) === String(req.params.id)
+      && (p.status === 'draft' || p.status === 'approved'));
+    const openIds = new Set(annotations.map(a => a.id));
+    const conflicts = [];
+    for (const p of unfinished) {
+      const covered = (p.annotations || []).map(a => a.id).filter(id => openIds.has(id));
+      if (covered.length > 0) {
+        conflicts.push({ plan_id: p.id, status: p.status, covered_annotation_ids: covered });
+      }
+    }
+    if (conflicts.length > 0) {
+      return res.status(409).json({
+        error: 'PLAN_ALREADY_EXISTS',
+        message: `当前待处理批注已有未处理的方案（${conflicts.map(c => `#${c.plan_id}`).join('、')}，状态 ${conflicts.map(c => c.status).join('/')}）。请先在方案页应用或驳回，避免同一批注生成重复方案；如确需重新生成，请强制重新生成。`,
+        conflicts
+      });
+    }
   }
 
   // Get current files with content.
@@ -345,13 +399,51 @@ router.post('/:id/plan', async (req, res) => {
       .join('\n');
   };
 
-  const normalizeChanges = (rawChanges) => (rawChanges || []).map(c => {
-    const healed = normalizePath(c.file_path);
-    if (healed !== c.file_path) {
-      console.log(`[plans] Path auto-heal: "${c.file_path}" -> "${healed}"`);
+  // Sanitize model-returned annotation_id. Models used to receive annotations
+  // labeled [1], [2]... (no real id) and echoed those indexes back, so
+  // planChanges got annotation_id=1/2 pointing at UNRELATED annotations (even
+  // from other projects). On apply, those wrong annotations were resolved
+  // while the real ones stayed open → the owner regenerated → duplicate plans.
+  // Valid ids pass through; obvious 1-based index echoes are remapped to the
+  // real annotation at that position; anything else is nulled.
+  const validAnnIds = new Set(annotations.map(a => a.id));
+  const sanitizeAnnotationId = (change) => {
+    const raw = change.annotation_id;
+    if (raw === null || raw === undefined || raw === '') return { ...change, annotation_id: null };
+    const num = Number(raw);
+    if (validAnnIds.has(num)) return { ...change, annotation_id: num };
+    if (Number.isInteger(num) && num >= 1 && num <= annotations.length) {
+      const real = annotations[num - 1];
+      console.log(`[plans] annotation_id auto-fix: change on "${change.file_path}" echoed index ${raw}, remapping to real annotation ${real.id}`);
+      return { ...change, annotation_id: real.id };
     }
-    return { ...c, file_path: healed };
-  });
+    console.warn(`[plans] Dropping bogus annotation_id ${JSON.stringify(raw)} on change for ${change.file_path}`);
+    return { ...change, annotation_id: null };
+  };
+
+  // Normalize + dedupe model changes. Exact duplicates (same file_path +
+  // old_code + new_code) happen when the model restates the same edit (e.g.
+  // restating the dual-write pair after a retry); keeping both would apply the
+  // same edit twice and show repeated suggestions under one annotation.
+  const normalizeChanges = (rawChanges) => {
+    const seen = new Set();
+    const out = [];
+    for (const c of (rawChanges || [])) {
+      const healed = { ...c, file_path: normalizePath(c.file_path) };
+      if (healed.file_path !== c.file_path) {
+        console.log(`[plans] Path auto-heal: "${c.file_path}" -> "${healed.file_path}"`);
+      }
+      const clean = sanitizeAnnotationId(healed);
+      const key = `${clean.file_path}\u0000${clean.old_code || ''}\u0000${clean.new_code || ''}`;
+      if (seen.has(key)) {
+        console.log(`[plans] Dedup change: identical edit on ${clean.file_path} dropped`);
+        continue;
+      }
+      seen.add(key);
+      out.push(clean);
+    }
+    return out;
+  };
 
   // ---- Batched vs single-pass generation ----------------------------------
   // Batching decision: non-reasoning model (fast enough for several API calls
@@ -760,6 +852,40 @@ router.post('/plans/:planId/changes/:changeId/reject', requireOwnerAuth, async (
   res.json(updated);
 });
 
+// Repair legacy planChanges annotation links — owner operation.
+// Older generations labeled annotations [1], [2]... in the prompt, so models
+// echoed those indexes back as annotation_id. This endpoint remaps obvious
+// index echoes to the real annotation ids recorded on the plan (positional,
+// matching the order the annotations were sent to the model) and nulls any
+// other bogus value, so apply resolves the RIGHT annotations.
+router.post('/plans/:planId/relink', requireOwnerAuth, async (req, res) => {
+  const plan = await getById('plans', req.params.planId);
+  if (!plan) return res.status(404).json({ error: 'Plan not found' });
+
+  const planAnns = plan.annotations || [];
+  const validIds = new Set(planAnns.map(a => a.id));
+  const changes = await query('planChanges', c => String(c.plan_id) === String(plan.id));
+
+  let fixed = 0, cleared = 0, kept = 0;
+  for (const c of changes) {
+    const raw = c.annotation_id;
+    if (raw === null || raw === undefined) { kept++; continue; }
+    const num = Number(raw);
+    if (validIds.has(num)) { kept++; continue; }
+    if (Number.isInteger(num) && num >= 1 && num <= planAnns.length) {
+      const realId = planAnns[num - 1].id;
+      await update('planChanges', c.id, { annotation_id: realId });
+      console.log(`[plans] relink: plan #${plan.id} change #${c.id} annotation_id ${raw} -> ${realId}`);
+      fixed++;
+    } else {
+      await update('planChanges', c.id, { annotation_id: null });
+      console.log(`[plans] relink: plan #${plan.id} change #${c.id} bogus annotation_id ${JSON.stringify(raw)} -> null`);
+      cleared++;
+    }
+  }
+  res.json({ plan_id: plan.id, changes_checked: changes.length, remapped: fixed, nulled: cleared, already_valid: kept });
+});
+
 // Apply approved changes to files and trigger redeploy — owner operation.
 // Failure semantics (fixed): when any change fails to apply, the plan is NOT
 // marked 'applied', annotations are NOT resolved, failed changes roll back to
@@ -878,9 +1004,18 @@ router.post('/plans/:planId/apply', requireOwnerAuth, async (req, res) => {
   const allChangesApplied = errors.length === 0;
   if (allChangesApplied) {
     // Everything applied cleanly: finalize the plan and resolve its annotations.
+    // GUARD: only resolve annotations that actually belong to THIS project —
+    // legacy changes carried bogus annotation_ids (model index echoes like 1/2)
+    // that would otherwise flip unrelated annotations (even in other projects)
+    // to resolved while the real ones stayed open, inviting duplicate plans.
     await update('plans', req.params.planId, { status: 'applied' });
     for (const change of changes) {
       if (change.annotation_id) {
+        const ann = await getById('annotations', change.annotation_id);
+        if (!ann || String(ann.project_id) !== String(plan.project_id)) {
+          console.warn(`[plans] apply: change #${change.id} references annotation ${change.annotation_id} outside project ${plan.project_id} — skip resolving`);
+          continue;
+        }
         await update('annotations', change.annotation_id, { status: 'resolved' });
       }
     }

@@ -128,7 +128,7 @@ export async function generatePlanWithMakers(apiKey, annotations, files, model =
         const snippet = (ele.text || '').slice(0, 80).replace(/\s+/g, ' ');
         elementLine = `\n    Target element: ${tag}${snippet}</${ele.tagName}> (path: ${ele.path || ''}, isHeading: ${!!ele.isHeading}, fontSize: ${ele.fontSize || 'unknown'})`;
       }
-      return `[${i + 1}] Page: ${a.page || 'index.html'}, Position: (${a.x}%, ${a.y}%), Comment: "${a.content}"${elementLine}`;
+      return `[Annotation ID: ${a.id}] (序号 ${i + 1}) Page: ${a.page || 'index.html'}, Position: (${a.x}%, ${a.y}%), Comment: "${a.content}"${elementLine}`;
     }).join('\n');
 
     // Build file context. Large files (e.g. 260KB generator scripts) cannot be
@@ -266,6 +266,7 @@ Rules:
 - old_code must be a substring that actually exists in the current file, so it can be replaced.
 - NEVER invent or reconstruct code that is not shown in the provided file excerpts. If the section you need is not visible in the excerpts, still build old_code ONLY from lines that appear verbatim in the excerpts (e.g. the file's real function/definition structure). Copy old_code character-for-character from the excerpt text.
 - Every annotation should map to one change.
+- annotation_id must be the REAL "Annotation ID" shown in brackets at the start of each annotation line (e.g. [Annotation ID: 986]), NOT the 序号/index and NOT a number you invent. Copy it verbatim. A dual-write pair (generator .py + HTML output) shares the SAME annotation_id.
 - CRITICAL precision rule: if an annotation includes "Target element" info, you MUST modify ONLY that exact element. Use the element's tag name, id, class, and path to build a unique old_code snippet. The old_code must include the target element's opening tag (with id/class attributes) and enough parent context so it matches EXACTLY ONCE in the file. Do NOT perform plain text replacements that could hit other parts of the page.
 - If no element info is provided, infer the target from the coordinate position (y≈top means header/hero, y≈bottom means footer) and still include the surrounding HTML context in old_code.
 - NEVER use a bare text snippet (e.g. just the text being changed) as old_code. The old_code must always contain the HTML tag and enough surrounding context.

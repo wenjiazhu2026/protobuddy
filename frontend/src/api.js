@@ -111,11 +111,11 @@ export const api = {
     return request(`/projects/${id}/annotations${query ? '?' + query : ''}`);
   },
   createAnnotation: (id, data) => request(`/projects/${id}/annotations`, { method: 'POST', body: data }),
-  updateAnnotation: (id, annId, data) => request(`/projects/${id}/annotations/${annId}`, { method: 'PUT', body: data }),
-  deleteAnnotation: (id, annId) => request(`/projects/${id}/annotations/${annId}`, { method: 'DELETE' }),
+  updateAnnotation: (id, annId, data, ownerToken) => request(`/projects/${id}/annotations/${annId}`, { method: 'PUT', body: data, ownerToken }),
+  deleteAnnotation: (id, annId, ownerToken) => request(`/projects/${id}/annotations/${annId}`, { method: 'DELETE', ownerToken }),
 
   // Plans (review/apply are owner operations; generation is open to all roles)
-  generatePlan: (id) => request(`/projects/${id}/plan`, { method: 'POST' }),
+  generatePlan: (id, opts = {}) => request(`/projects/${id}/plan${opts.force ? '?force=1' : ''}`, { method: 'POST' }),
   listPlans: (id) => request(`/projects/${id}/plans`),
   getPlan: (planId) => request(`/projects/plans/${planId}`),
   approvePlan: (planId, ownerToken) => request(`/projects/plans/${planId}/approve`, { method: 'POST', ownerToken }),
