@@ -51,3 +51,9 @@ Thumbs.db
 .playwright/
 .playwright-cli/
 output/
+
+# Tencent Cloud EdgeOne
+.env
+.edgeone/*
+.tef_dist/*
+  

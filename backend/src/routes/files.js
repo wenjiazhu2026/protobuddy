@@ -211,15 +211,34 @@ function injectEditorBootstrap(html) {
   const script = '<script data-hve-editor="true" data-proto-editor="true">' +
     '/*__pbEditorBootstrap*/(function(){' +
     'if(window.__pbEditorInit)return;window.__pbEditorInit=1;' +
-    // Editor static base: the preview lives at {prefix}/projects/:id/preview/*,
-    // the editor assets at {prefix}/editor/* (dev: /api/editor, prod: /express/api/editor).
-    'var BASE=(function(){var m=location.pathname.match(/^(.*\\/)projects\\//);return(m?m[1]:"/api/")+"editor/";})();' +
+    // Editor static base: the preview lives in the same origin as the editor
+    // assets, but the correct mount differs per runtime:
+    //   - EdgeOne Makers (prod): dist/editor/ -> static hosting at /editor/
+    //   - local single-server:    frontend build served by Express -> /editor/
+    //   - local two-server dev:   preview iframe origin is this app -> /api/editor/
+    // Probe both with a same-origin XHR and use whichever answers 200.
+    'var editorBases=["/editor/","/api/editor/"],BASE=null;' +
     'var MODULES=["html-serializer.js","proto-file-manager.js","history.js","selector.js","drag-move.js","resize.js","text-edit.js","table-edit.js","image-handler.js","align-guide.js","toolbar.js","insert-panel.js","context-menu.js","editor-core.js"];' +
     'var active=false,loading=false;' +
     'function report(){try{window.parent.postMessage({__pbEditReady:1,active:active},"*")}catch(e){}}' +
-    'function loadModules(){if(loading)return Promise.resolve();' +
+    'function resolveBase(cb){' +
+    'if(BASE){cb(BASE);return}' +
+    'var i=0;' +
+    '(function probe(){' +
+    'if(i>=editorBases.length){cb(null);return}' +
+    'var b=editorBases[i++];' +
+    'var x=new XMLHttpRequest();' +
+    'try{x.open("GET",b+"editor.css",true);}catch(e){probe();return}' +
+    'x.onloadend=function(){if(x.status>=200&&x.status<300){BASE=b;cb(b)}else probe()};' +
+    'x.onerror=function(){probe()};' +
+    'x.send();' +
+    '})();' +
+    '}' +
+    'function loadModules(){if(loading)return Promise.resolve(true);' +
     'loading=true;' +
     'return new Promise(function(res){' +
+    'resolveBase(function(ok){' +
+    'if(!ok){loading=false;res(false);return}' +
     'var css=document.createElement("link");css.rel="stylesheet";css.href=BASE+"editor.css";css.setAttribute("data-hve-editor","true");' +
     '(document.head||document.documentElement).appendChild(css);' +
     'var i=0,body=document.body||document.documentElement;' +
@@ -230,12 +249,13 @@ function injectEditorBootstrap(html) {
     'body.appendChild(s);' +
     '}next();' +
     '});' +
+    '});' +
     '}' +
     'function enable(){' +
     'if(active)return report();' +
     'if(window.HVE_Core){window.HVE_Core.enable();active=true;report();return}' +
-    'loadModules().then(function(){' +
-    'if(window.HVE_Core){window.HVE_Core.enable();active=true;}' +
+    'loadModules().then(function(ok){' +
+    'if(ok&&window.HVE_Core){window.HVE_Core.enable();active=true;}' +
     'report();' +
     '});' +
     '}' +
