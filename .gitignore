@@ -45,3 +45,9 @@ Thumbs.db
 
 # Source maps
 *.map
+
+# Local dev / e2e artifacts (never commit)
+.npm-cache/
+.playwright/
+.playwright-cli/
+output/

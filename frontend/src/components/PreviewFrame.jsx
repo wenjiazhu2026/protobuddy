@@ -50,13 +50,15 @@ function normalizePage(p) {
  * {__protoNav}. This component tracks the current page so annotation pins are
  * filtered per page and new annotations record which page they belong to.
  */
-function PreviewFrame({ projectId, version, annotateMode, onAnnotate, annotations, activeAnnotationId, onAnnotationClick, onPageChange }, ref) {
+function PreviewFrame({ projectId, version, annotateMode, onAnnotate, annotations, activeAnnotationId, onAnnotationClick, onPageChange, editMode = false, onEditorSave, onEditStateChange }, ref) {
   const containerRef = useRef(null);
   const iframeRef = useRef(null);
   const probeRef = useRef({ nextId: 0, results: {} });
   const pendingQueryRef = useRef(null);
   const rafRef = useRef(null);
   const draftInputRef = useRef(null);
+  const editModeRef = useRef(editMode);
+  const pendingEditRef = useRef(null);
 
   const [iframeKey, setIframeKey] = useState(0);
   const [scrollPos, setScrollPos] = useState({ x: 0, y: 0 });
@@ -86,6 +88,61 @@ function PreviewFrame({ projectId, version, annotateMode, onAnnotate, annotation
     setDraft(null);
     setDraftInput('');
   }, [version]);
+
+  // ----- Visual editor (可视化编辑) support -----
+  // Keep a ref so the postMessage listener always sees the latest value without
+  // re-registering listeners on every toggle.
+  useEffect(() => { editModeRef.current = editMode; }, [editMode]);
+
+  // Ask the iframe to turn the visual editor on/off.
+  const sendEditMode = useCallback((delay = 0) => {
+    const fire = () => {
+      const win = iframeRef.current?.contentWindow;
+      if (!win) return;
+      try {
+        win.postMessage({ __pbEdit: { v: editModeRef.current ? 1 : 0 } }, allowedOrigin);
+      } catch (_) {
+        // iframe not ready / navigated; ignore
+      }
+    };
+    if (delay > 0) {
+      const t = setTimeout(fire, delay);
+      if (pendingEditRef.current) clearTimeout(pendingEditRef.current);
+      pendingEditRef.current = t;
+    } else {
+      fire();
+    }
+  }, [allowedOrigin]);
+
+  // Turn the editor on when the toggle flips, and re-apply it after a reload
+  // (version change) or a sub-page navigation (each document gets a fresh
+  // bootstrap, so the mode message must be re-sent).
+  useEffect(() => {
+    sendEditMode(0);
+  }, [editMode, sendEditMode]);
+
+  useEffect(() => {
+    if (!editMode) return;
+    const t = setTimeout(() => sendEditMode(0), 250);
+    return () => clearTimeout(t);
+  }, [version, editMode, sendEditMode]);
+
+  // Reply to a save request from the editor: hand the serialized HTML to the
+  // parent, wait for the owner-gated write, then report the result back.
+  const handleEditorSave = useCallback((page, html) => {
+    const win = iframeRef.current?.contentWindow;
+    return Promise.resolve(onEditorSave && onEditorSave(page, html))
+      .then(res => {
+        const ok = !!(res && res.ok);
+        const error = (res && res.error) || '';
+        try { win?.postMessage({ __pbSaveRes: { page, ok, error } }, allowedOrigin); } catch (_) {}
+        return ok;
+      })
+      .catch(err => {
+        try { win?.postMessage({ __pbSaveRes: { page, ok: false, error: err?.message || '保存失败' } }, '*'); } catch (_) {}
+        return false;
+      });
+  }, [onEditorSave, allowedOrigin]);
 
   // Only show pins for annotations on the currently displayed page
   const visibleAnnotations = useMemo(() => {
@@ -168,14 +225,40 @@ function PreviewFrame({ projectId, version, annotateMode, onAnnotate, annotation
       setDraftInput('');
       onPageChange?.(page);
       scheduleElementQuery();
+      // A fresh sub-page document carries a fresh editor bootstrap, so re-apply
+      // the current editor mode after it has had time to load.
+      if (editModeRef.current) sendEditMode(300);
     } else if (d.__protoElement) {
       // store element probe result keyed by request id
       probeRef.current.results[d.id] = d;
     } else if (d.__protoElementPos) {
       // store latest bounding rect for this annotation's anchor element
       setElementPositions(prev => ({ ...prev, [d.id]: d.found ? d : null }));
+    } else if (d.__pbEditReady) {
+      // Visual editor became active/ready inside the iframe -> inform parent
+      onEditStateChange?.(!!d.active);
+    } else if (d.__pbEditExit) {
+      // User pressed the in-page "退出" button; parent should resync its toggle
+      onEditStateChange?.(false);
+    } else if (d.__pbSave) {
+      // Editor saved a page: hand it to the parent; the reply guarantees a
+      // __pbSaveRes is always sent back (the iframe is waiting on it).
+      const inner = d.__pbSave || {};
+      const page = String(inner.page || 'index.html');
+      const html = String(inner.html || '');
+      if (!editModeRef.current) {
+        try {
+          iframeRef.current?.contentWindow?.postMessage({ __pbSaveRes: { page, ok: false, error: '编辑模式已关闭' } }, allowedOrigin);
+        } catch (_) {}
+      } else if (!html) {
+        try {
+          iframeRef.current?.contentWindow?.postMessage({ __pbSaveRes: { page, ok: false, error: '内容为空' } }, allowedOrigin);
+        } catch (_) {}
+      } else {
+        handleEditorSave(page, html);
+      }
     }
-  }, [onPageChange, scheduleElementQuery, allowedOrigin]);
+  }, [onPageChange, scheduleElementQuery, allowedOrigin, sendEditMode, handleEditorSave, onEditStateChange]);
 
   useEffect(() => {
     window.addEventListener('message', handleScrollMessage);
@@ -221,15 +304,18 @@ function PreviewFrame({ projectId, version, annotateMode, onAnnotate, annotation
         setDraft(null);
         setDraftInput('');
         onPageChange?.(target);
+        // Keep the editor active across sub-page navigations.
+        if (editModeRef.current) sendEditMode(300);
       }
     }
-  }), [previewUrl, onPageChange]);
+  }), [previewUrl, onPageChange, sendEditMode]);
 
   // Clean up timers and rAF on unmount
   useEffect(() => {
     return () => {
       if (pendingQueryRef.current) clearTimeout(pendingQueryRef.current);
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      if (pendingEditRef.current) clearTimeout(pendingEditRef.current);
     };
   }, []);
 
@@ -248,7 +334,7 @@ function PreviewFrame({ projectId, version, annotateMode, onAnnotate, annotation
   }, []);
 
   const handleClick = (e) => {
-    if (!annotateMode) return;
+    if (!annotateMode || editMode) return;
     if (!containerRef.current) return;
 
     const rect = containerRef.current.getBoundingClientRect();
@@ -395,10 +481,12 @@ function PreviewFrame({ projectId, version, annotateMode, onAnnotate, annotation
         title="Prototype Preview"
         sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
       />
-      {/* Transparent overlay - sits on top of iframe, same size */}
+      {/* Transparent overlay - sits on top of iframe, same size.
+          In visual-edit mode the pointer must reach the iframe (the editor
+          handles clicks INSIDE the page), so the overlay never captures. */}
       <div
-        className={`annotation-overlay ${annotateMode ? 'mode-annotate' : ''}`}
-        style={{ pointerEvents: annotateMode ? 'auto' : 'none' }}
+        className={`annotation-overlay ${annotateMode && !editMode ? 'mode-annotate' : ''}`}
+        style={{ pointerEvents: annotateMode && !editMode ? 'auto' : 'none' }}
       >
         {visibleAnnotations.map((ann, idx) => {
           const statusClass = ann.status === 'resolved' ? 'resolved' : ann.status === 'rejected' ? 'rejected' : '';

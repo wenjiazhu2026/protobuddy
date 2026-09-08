@@ -13,6 +13,7 @@ export default function Review() {
   const [project, setProject] = useState(null);
   const [annotations, setAnnotations] = useState([]);
   const [annotateMode, setAnnotateMode] = useState(false);
+  const [editMode, setEditMode] = useState(false);
   const [activeAnnotationId, setActiveAnnotationId] = useState(null);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
@@ -24,6 +25,12 @@ export default function Review() {
   const [panelOpen, setPanelOpen] = useState(() => {
     try { return localStorage.getItem('protobuddy.review.panel.open') !== 'false'; } catch { return true; }
   });
+
+  // Editor ready/exit reports from the iframe (stable identity so the preview
+  // message listener is not re-registered on every render).
+  const handleEditStateChange = useCallback((active) => {
+    setEditMode(!!active);
+  }, []);
 
   useEffect(() => {
     try { localStorage.setItem('protobuddy.review.panel.open', String(panelOpen)); } catch {}
@@ -111,6 +118,28 @@ export default function Review() {
     }
   };
 
+  /**
+   * Visual-edit save: the iframe editor serializes a page back to HTML and
+   * posts it here. Writing files is owner-gated (like upload/deploy), so the
+   * OwnerAuth guard opens the password dialog when needed. On success the
+   * project version bumps and the preview reloads with the edited content.
+   */
+  const handleEditorSave = useCallback(async (page, html) => {
+    try {
+      await guard(id, () => api.writeFile(id, page, html, getOwnerToken(id)));
+      setProject(p => ({ ...p, version: (p.version || 1) + 1 }));
+      setEditMode(false);
+      showToast(`已保存到项目 · ${page.split('/').pop()}`, 'success');
+      return { ok: true };
+    } catch (err) {
+      if (err && /verification cancelled/i.test(err.message)) {
+        return { ok: false, error: '未通过 owner 验证，未保存' };
+      }
+      showToast('保存失败: ' + err.message, 'error');
+      return { ok: false, error: err.message };
+    }
+  }, [id, guard, showToast]);
+
   const handleGeneratePlan = async (opts = {}) => {
     if (generating) return;
     setGenerating(true);
@@ -164,8 +193,22 @@ export default function Review() {
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
           <button
+            className={`btn ${editMode ? 'btn-accent' : 'btn-secondary'}`}
+            onClick={() => {
+              if (!editMode && annotateMode) setAnnotateMode(false);
+              setEditMode(!editMode);
+            }}
+            disabled={!hasPreview}
+            title="直接拖拽/双击编辑 HTML 原型，改完点「保存到项目」写回平台存储"
+          >
+            {editMode ? '◉ 编辑模式中…' : '🖱 可视化编辑'}
+          </button>
+          <button
             className={`btn ${annotateMode ? 'btn-danger' : 'btn-primary'}`}
-            onClick={() => setAnnotateMode(!annotateMode)}
+            onClick={() => {
+              if (!annotateMode && editMode) setEditMode(false);
+              setAnnotateMode(!annotateMode);
+            }}
             disabled={!hasPreview}
           >
             {annotateMode ? '● 点击预览区添加批注（再次点击退出）' : '+ 添加批注'}
@@ -206,6 +249,11 @@ export default function Review() {
             {project.current_url && (
               <span className="preview-url">{project.current_url}</span>
             )}
+            {editMode && (
+              <span className="badge badge-blue" style={{ animation: 'pulse 1.5s infinite', border: '1px solid var(--primary)' }}>
+                可视化编辑模式 · 点选/拖拽/双击，⌘S 或「保存到项目」写回平台
+              </span>
+            )}
             {annotateMode && (
               <span className="badge badge-orange" style={{ animation: 'pulse 1.5s infinite' }}>
                 批注模式 · 点击任意位置
@@ -221,6 +269,9 @@ export default function Review() {
               projectId={id}
               version={project.version}
               annotateMode={annotateMode}
+              editMode={editMode}
+              onEditorSave={handleEditorSave}
+              onEditStateChange={handleEditStateChange}
               onAnnotate={handleAnnotate}
               annotations={annotations}
               activeAnnotationId={activeAnnotationId}

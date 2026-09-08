@@ -64,6 +64,12 @@ router.post('/:id/files', requireOwnerAuth, async (req, res) => {
     });
   }
 
+  // Every stored-content change is a new prototype version (same convention as
+  // uploads): keeps the "平台存储 v{n}" badge consistent across reloads.
+  await update('projects', req.params.id, {
+    version: (project.version || 0) + 1
+  });
+
   res.json({ success: true, path: filePath });
 });
 
@@ -180,6 +186,72 @@ function injectScrollSyncScript(html) {
   return html + script;
 }
 
+/**
+ * Inject the ProtoBuddy visual-editor bootstrap into prototype HTML.
+ *
+ * This is a LAZY loader, not the editor itself: it adds ~1.5KB of inline JS
+ * that waits for the parent review page to send {__pbEdit:{v:1}} (edit mode
+ * on / off). Only then does it load the editor stylesheet + modules (served
+ * at /api/editor/*) and call HVE_Core.enable().
+ *
+ * Save flow: the editor serializes the live DOM back to HTML and posts
+ * {__pbSave:{page,html}} to the parent window (ProtoBuddy review app), which
+ * writes the file back to the project through the owner-gated files API and
+ * replies {__pbSaveRes:{ok,error}}.
+ *
+ * Clean-up: the bootstrap <script> carries data-hve-editor so that the
+ * editor's HTML serializer (html-serializer.js) strips it from saved output,
+ * exactly as it strips the editor's own injected UI. The persisted file thus
+ * contains no editor code; the server re-injects the bootstrap on every load.
+ * Idempotent: skips if already present (marker string + a __proto flag).
+ */
+function injectEditorBootstrap(html) {
+  if (!html || html.indexOf('__pbEditorBootstrap') !== -1) return html;
+
+  const script = '<script data-hve-editor="true" data-proto-editor="true">' +
+    '/*__pbEditorBootstrap*/(function(){' +
+    'if(window.__pbEditorInit)return;window.__pbEditorInit=1;' +
+    // Editor static base: the preview lives at {prefix}/projects/:id/preview/*,
+    // the editor assets at {prefix}/editor/* (dev: /api/editor, prod: /express/api/editor).
+    'var BASE=(function(){var m=location.pathname.match(/^(.*\\/)projects\\//);return(m?m[1]:"/api/")+"editor/";})();' +
+    'var MODULES=["html-serializer.js","proto-file-manager.js","history.js","selector.js","drag-move.js","resize.js","text-edit.js","table-edit.js","image-handler.js","align-guide.js","toolbar.js","insert-panel.js","context-menu.js","editor-core.js"];' +
+    'var active=false,loading=false;' +
+    'function report(){try{window.parent.postMessage({__pbEditReady:1,active:active},"*")}catch(e){}}' +
+    'function loadModules(){if(loading)return Promise.resolve();' +
+    'loading=true;' +
+    'return new Promise(function(res){' +
+    'var css=document.createElement("link");css.rel="stylesheet";css.href=BASE+"editor.css";css.setAttribute("data-hve-editor","true");' +
+    '(document.head||document.documentElement).appendChild(css);' +
+    'var i=0,body=document.body||document.documentElement;' +
+    'function next(){' +
+    'if(i>=MODULES.length){loading=false;res(true);return}' +
+    'var s=document.createElement("script");s.src=BASE+"modules/"+MODULES[i];s.setAttribute("data-hve-editor","true");' +
+    's.onload=s.onerror=function(){i++;next()};' +
+    'body.appendChild(s);' +
+    '}next();' +
+    '});' +
+    '}' +
+    'function enable(){' +
+    'if(active)return report();' +
+    'if(window.HVE_Core){window.HVE_Core.enable();active=true;report();return}' +
+    'loadModules().then(function(){' +
+    'if(window.HVE_Core){window.HVE_Core.enable();active=true;}' +
+    'report();' +
+    '});' +
+    '}' +
+    'function disable(){if(active&&window.HVE_Core){window.HVE_Core.disable()}active=false;report();}' +
+    'window.addEventListener("message",function(e){' +
+    'var d=e.data;if(!d||typeof d.__pbEdit==="undefined")return;' +
+    'if(d.__pbEdit.v===1)enable();else disable();' +
+    '});' +
+    '})();</script>';
+
+  if (html.toLowerCase().indexOf('</body>') !== -1) {
+    return html.replace(/<\/body>/i, script + '</body>');
+  }
+  return html + script;
+}
+
 // Send content with proper content-type; HTML gets scroll-sync injection
 function sendContent(res, filePath, content) {
   const ext = (filePath.split('.').pop() || '').toLowerCase();
@@ -193,6 +265,7 @@ function sendContent(res, filePath, content) {
   let text = content.data;
   if (ext === 'html' || ext === 'htm') {
     text = injectScrollSyncScript(text);
+    text = injectEditorBootstrap(text);
     res.type('html').send(text);
   } else {
     res.type(ext || 'text/plain').send(text);

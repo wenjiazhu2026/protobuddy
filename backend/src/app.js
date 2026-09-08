@@ -148,6 +148,12 @@ export function createApp({ makersPrefix } = {}) {
   app.use('/api/projects', wrapAsyncHandlers(plansRouter));       // /api/projects/:id/plan + /api/plans/:planId
   app.use('/api/projects', wrapAsyncHandlers(tasksRouter));       // /api/projects/:id/tasks*
 
+  // Visual editor assets (<script src="/api/editor/modules/*.js"> are lazy-loaded
+  // inside the preview iframe by the bootstrap injected in files.js). Same
+  // origin as the API + preview, so no CORS/CSP changes are needed.
+  const editorDir = path.join(__dirname, '..', 'public', 'editor');
+  app.use('/api/editor', express.static(editorDir, { index: false, maxAge: '1h', etag: true }));
+
   // Serve frontend build (local server only; Makers serves static itself)
   if (!blobMode) {
     const frontendBuild = resolveFrontendBuild();
