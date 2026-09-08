@@ -88,6 +88,61 @@ export const api = {
     }
     return request(`/projects/${id}/upload`, { method: 'POST', body: formData, ownerToken });
   },
+  /**
+   * Upload with automatic chunking. EdgeOne Makers Cloud Functions cap the
+   * request body at 6 MiB (larger short-circuits to a platform 500), so
+   * anything above the threshold is split into 4 MiB parts posted to
+   * /upload/chunk and finalized via /upload/finish. Small payloads keep the
+   * original single-request path.
+   *   type='folder' - payload = Array<{file: File, relPath: string}>
+   *   type='zip'    - payload = File
+   *   type='html'   - payload = File
+   */
+  uploadPrototypeChunked: async (id, type, payload, ownerToken, onProgress) => {
+    const items = type === 'folder'
+      ? payload
+      : [{ file: payload, relPath: type === 'html' ? 'index.html' : '__package.zip' }];
+    const totalBytes = items.reduce((s, it) => s + (it.file.size || 0), 0);
+
+    // Chunk payloads near/over the platform body cap.
+    if (totalBytes <= 5 * 1024 * 1024) {
+      const result = type === 'folder'
+        ? await api.uploadPrototypeFiles(id, 'folder', payload, ownerToken)
+        : await api.uploadPrototypeFiles(id, type, payload, ownerToken);
+      return result;
+    }
+
+    const CHUNK_BYTES = 4 * 1024 * 1024; // 4 MiB, safely under the 6 MiB cap
+    const uploadId = `u${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+
+    const files = [];
+    let sent = 0;
+    for (const item of items) {
+      const { file, relPath } = item;
+      const chunkCount = Math.max(1, Math.ceil((file.size || 0) / CHUNK_BYTES));
+      files.push({ path: relPath, chunkCount });
+      for (let i = 0; i < chunkCount; i++) {
+        const start = i * CHUNK_BYTES;
+        const slice = file.slice(start, start + CHUNK_BYTES);
+        const formData = new FormData();
+        formData.append('uploadId', uploadId);
+        formData.append('path', relPath);
+        formData.append('index', String(i));
+        formData.append('data', slice, `part${i}`);
+        await request(`/projects/${id}/upload/chunk`, { method: 'POST', body: formData, ownerToken });
+        sent += slice.size;
+        if (onProgress) onProgress(Math.min(100, Math.round((sent / totalBytes) * 90)));
+      }
+    }
+
+    const data = await request(`/projects/${id}/upload/finish`, {
+      method: 'POST',
+      body: { uploadId, type, files },
+      ownerToken
+    });
+    if (onProgress) onProgress(100);
+    return data;
+  },
 
   // Files (write/delete are owner maintenance operations)
   listFiles: (id) => request(`/projects/${id}/files`),

@@ -242,4 +242,80 @@ export function removeProjectFiles(projectId) {
   return true;
 }
 
+/* ------------------------- chunked upload -------------------------
+ * Mirrors fileStorageBlob's chunked-upload contract (client posts <=6MiB
+ * parts under an uploadId, then calls /upload/finish). Parts are staged
+ * OUTSIDE the project dir (backend/data/.pb-parts/<projectId>/<uploadId>/<relPath>/part<i>)
+ * so that clearProjectFiles() — which wipes the project dir — never
+ * deletes in-flight parts.
+ */
+function partsDir(projectId, uploadId) {
+  return path.join(PROJECTS_DIR, '..', '.pb-parts', String(projectId), String(uploadId));
+}
+
+// Normalize a relative path and reject traversal (returns '' when unsafe).
+function safeRel(relPath) {
+  const rel = String(relPath || '').replace(/\\/g, '/').replace(/^\/+/, '');
+  if (!rel || rel.split('/').includes('..')) return '';
+  const norm = path.normalize(rel);
+  if (norm === '.' || norm.startsWith('..') || path.isAbsolute(norm)) return '';
+  return norm.split(path.sep).join('/');
+}
+
+export function saveChunk(projectId, uploadId, relPath, index, buffer) {
+  const rel = safeRel(relPath);
+  if (!rel) return false;
+  const base = partsDir(projectId, uploadId);
+  const full = path.join(base, rel, `part${index}`);
+  if (!full.startsWith(base + path.sep)) return false;
+  fs.mkdirSync(path.dirname(full), { recursive: true });
+  fs.writeFileSync(full, buffer);
+  return true;
+}
+
+export function clearUploadParts(projectId, uploadId) {
+  const dir = partsDir(projectId, uploadId);
+  if (fs.existsSync(dir)) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+export function readChunk(projectId, uploadId, relPath, index) {
+  const rel = safeRel(relPath);
+  if (!rel) return null;
+  const p = path.join(partsDir(projectId, uploadId), rel, `part${index}`);
+  try {
+    return fs.readFileSync(p);
+  } catch {
+    return null;
+  }
+}
+
+export function finalizeUpload(projectId, uploadId, files) {
+  const projectDir = getProjectDir(projectId);
+  const base = partsDir(projectId, uploadId);
+  const written = [];
+  for (const f of files) {
+    const rel = safeRel(f.path);
+    if (!rel) continue;
+    if (path.basename(rel) === '.DS_Store' || path.basename(rel) === 'Thumbs.db') continue;
+    const chunkDir = path.join(base, rel);
+    const parts = [];
+    let missing = false;
+    for (let i = 0; i < (f.chunkCount || 1); i++) {
+      const p = path.join(chunkDir, `part${i}`);
+      if (!fs.existsSync(p)) { missing = true; break; }
+      parts.push(fs.readFileSync(p));
+    }
+    if (missing) continue;
+    const fullPath = path.join(projectDir, rel);
+    if (fullPath !== projectDir && !fullPath.startsWith(projectDir + path.sep)) continue;
+    fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+    fs.writeFileSync(fullPath, parts.length === 1 ? parts[0] : Buffer.concat(parts));
+    written.push(rel);
+  }
+  clearUploadParts(projectId, uploadId);
+  return written;
+}
+
 export { PROJECTS_DIR };

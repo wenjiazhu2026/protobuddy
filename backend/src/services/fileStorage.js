@@ -57,6 +57,10 @@ export const getFileSize = wrap('getFileSize');
 export const listProjectFiles = wrap('listProjectFiles');
 export const ensureProjectDir = wrap('ensureProjectDir');
 export const removeProjectFiles = wrap('removeProjectFiles');
+export const saveChunk = wrap('saveChunk');
+export const clearUploadParts = wrap('clearUploadParts');
+export const readChunk = wrap('readChunk');
+export const finalizeUpload = wrap('finalizeUpload');
 
 // Pure helper, driver-independent (avoids forcing the local driver to load).
 const BINARY_EXTS = ['.png', '.jpg', '.jpeg', '.gif', '.ico', '.webp', '.svg', '.woff', '.woff2', '.ttf', '.eot', '.otf', '.mp4', '.mp3', '.pdf', '.zip', '.rar'];

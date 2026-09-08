@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import multer from 'multer';
 import { getAll, getById, insert, update, remove, query, removeSetting } from '../db.js';
-import { unzipToProject, writeUploadedFiles, clearProjectFiles, ensureProjectDir, getFileSize, removeProjectFiles } from '../services/fileStorage.js';
+import { unzipToProject, writeUploadedFiles, clearProjectFiles, ensureProjectDir, getFileSize, removeProjectFiles, saveChunk, readChunk, finalizeUpload, clearUploadParts } from '../services/fileStorage.js';
 import { requireOwnerAuth } from '../services/ownerAuth.js';
 
 const router = Router();
@@ -252,6 +252,132 @@ router.post('/:id/upload', requireOwnerAuth, upload.fields([{ name: 'file', maxC
   } catch (err) {
     console.error('[upload] Error:', err);
     res.status(500).json({ error: `Failed to process upload: ${err.message}` });
+  }
+});
+
+/* ------------------------- Chunked upload -------------------------
+ * EdgeOne Makers Cloud Functions cap the REQUEST body at 6 MiB — anything
+ * larger short-circuits with a platform 500 before any app code runs (no
+ * JSON error body, just the Tencent "500" page). Prototype folders with
+ * images routinely exceed that, so the client uploads each <=4MiB slice as
+ * its own request under a client-generated uploadId, then POSTs
+ * /upload/finish to concatenate the parts into the final project files.
+ */
+
+const UPLOAD_ID_RE = /^[A-Za-z0-9_-]{6,80}$/;
+
+// POST /:id/upload/chunk - one multipart body with a single `data` file field
+// + text fields { uploadId, path, index }.
+router.post('/:id/upload/chunk', requireOwnerAuth, upload.fields([{ name: 'data', maxCount: 1 }]), async (req, res) => {
+  try {
+    const chunk = req.files?.data?.[0];
+    if (!chunk) return res.status(400).json({ error: 'Missing chunk data' });
+    const uploadId = String(req.body.uploadId || '');
+    if (!UPLOAD_ID_RE.test(uploadId)) {
+      return res.status(400).json({ error: 'Invalid uploadId' });
+    }
+    const path = String(req.body.path || '').replace(/\\/g, '/');
+    const index = parseInt(req.body.index || '', 10);
+    if (!Number.isInteger(index) || index < 0 || index > 8192) {
+      return res.status(400).json({ error: 'Invalid chunk index' });
+    }
+    await saveChunk(req.params.id, uploadId, path, index, chunk.buffer);
+    res.json({ ok: true, index });
+  } catch (err) {
+    console.error('[upload/chunk] Error:', err);
+    res.status(500).json({ error: `Failed to store chunk: ${err.message}` });
+  }
+});
+
+// POST /:id/upload/finish - body: { uploadId, type, files:[{path, chunkCount}] }
+// Concatenates parts, writes project files, inserts records, bumps version.
+router.post('/:id/upload/finish', requireOwnerAuth, async (req, res) => {
+  try {
+    const projectId = req.params.id;
+    const project = await getById('projects', projectId);
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    const uploadId = String(req.body.uploadId || '');
+    if (!UPLOAD_ID_RE.test(uploadId)) {
+      return res.status(400).json({ error: 'Invalid uploadId' });
+    }
+    const type = String(req.body.type || 'folder').toLowerCase();
+    const files = Array.isArray(req.body.files) ? req.body.files : [];
+    if (files.length === 0) return res.status(400).json({ error: 'No files to finalize' });
+    if (files.length > UPLOAD_MAX_FILES) {
+      return res.status(400).json({ error: `文件数量超过上限 ${UPLOAD_MAX_FILES}` });
+    }
+    for (const f of files) {
+      const n = parseInt(f.chunkCount, 10);
+      if (!Number.isInteger(n) || n < 1 || n > 4096) {
+        return res.status(400).json({ error: `Invalid chunkCount for ${f.path}` });
+      }
+    }
+
+    try {
+      // Replace the previous prototype content (parts live outside the
+      // project namespace, so this never deletes in-flight chunks).
+      await clearProjectFiles(projectId);
+
+      let filePaths = [];
+      if (type === 'zip') {
+        // Reassemble the single package then unpack it.
+        const pkg = files[0];
+        const parts = [];
+        for (let i = 0; i < pkg.chunkCount; i++) {
+          const part = await readChunk(projectId, uploadId, pkg.path, i);
+          if (part === null) throw new Error(`Missing chunk ${i} of ${pkg.path}`);
+          parts.push(part);
+        }
+        const totalLen = parts.reduce((s, b) => s + b.length, 0);
+        const assembled = Buffer.concat(parts, totalLen);
+        await ensureProjectDir(projectId);
+        filePaths = await unzipToProject(projectId, assembled);
+      } else {
+        const mapped = files.map(f => ({ path: type === 'html' ? 'index.html' : f.path, chunkCount: f.chunkCount }));
+        filePaths = await finalizeUpload(projectId, uploadId, mapped);
+      }
+
+      const hasIndex = filePaths.some(fp => fp.replace(/\\/g, '/').split('/').pop() === 'index.html');
+      if (!hasIndex && type !== 'zip') {
+        await clearProjectFiles(projectId);
+        return res.status(400).json({ error: '上传内容必须包含 index.html 文件' });
+      }
+
+      // Replace old file records.
+      const oldFiles = await query('files', f => String(f.project_id) === String(projectId));
+      for (const f of oldFiles) await remove('files', f.id);
+
+      const filesOut = [];
+      for (const fp of filePaths) {
+        const size = await getFileSize(projectId, fp);
+        filesOut.push(await insert('files', {
+          project_id: projectId,
+          path: fp,
+          version: 1,
+          size
+        }));
+      }
+      await update('projects', projectId, {
+        status: 'uploaded',
+        version: (project.version || 0) + 1
+      });
+
+      try { await clearUploadParts(projectId, uploadId); } catch { /* best effort */ }
+
+      res.json({
+        success: true,
+        fileCount: filesOut.length,
+        uploadType: type,
+        files: filesOut.map(f => ({ id: f.id, path: f.path, version: f.version }))
+      });
+    } catch (err) {
+      console.error('[upload/finish] Error:', err);
+      res.status(500).json({ error: `Failed to finalize upload: ${err.message}` });
+    }
+  } catch (err) {
+    console.error('[upload/finish] Error:', err);
+    res.status(500).json({ error: `Failed to finalize upload: ${err.message}` });
   }
 });
 

@@ -50,7 +50,7 @@ export default function Dashboard() {
     setUploading(true);
     try {
       // Owner operation: guarded by the owner password (one-time per session)
-      const result = await guard(id, () => api.uploadPrototype(id, file, getOwnerToken(id)));
+      const result = await guard(id, () => api.uploadPrototypeChunked(id, 'zip', file, getOwnerToken(id)));
       showToast(`ZIP 上传成功，共 ${result.fileCount} 个文件`);
       load();
     } catch (err) {
@@ -70,7 +70,7 @@ export default function Dashboard() {
         file,
         relPath: file.webkitRelativePath || file.name
       }));
-      const result = await guard(id, () => api.uploadPrototypeFiles(id, 'folder', items, getOwnerToken(id)));
+      const result = await guard(id, () => api.uploadPrototypeChunked(id, 'folder', items, getOwnerToken(id)));
       showToast(`文件夹上传成功，共 ${result.fileCount} 个文件`);
       load();
     } catch (err) {
@@ -86,7 +86,7 @@ export default function Dashboard() {
     if (!file) return;
     setUploading(true);
     try {
-      const result = await guard(id, () => api.uploadPrototypeFiles(id, 'html', file, getOwnerToken(id)));
+      const result = await guard(id, () => api.uploadPrototypeChunked(id, 'html', file, getOwnerToken(id)));
       showToast('index.html 上传成功');
       load();
     } catch (err) {
