@@ -77,7 +77,6 @@ router.get('/:id/export', async (req, res) => {
   if (!paths.length) return res.status(404).json({ error: 'No files in project' });
 
   const zip = new AdmZip();
-  let total = 0;
   for (const p of paths) {
     const content = await readFileContent(req.params.id, p);
     if (!content) continue;
@@ -86,19 +85,19 @@ router.get('/:id/export', async (req, res) => {
     } else {
       zip.addFile(p, Buffer.from(String(content.data), 'utf-8'));
     }
-    total += content.binary ? content.data.length * 3 / 4 : Buffer.byteLength(String(content.data), 'utf-8');
-  }
-
-  // EdgeOne caps response bodies at ~6MiB; stream something comfortably below.
-  // Larger projects should be downloaded file-by-file instead.
-  const MAX_EXPORT = 5.5 * 1024 * 1024;
-  if (total > MAX_EXPORT) {
-    return res.status(413).json({
-      error: `原型总大小超过 ${Math.round(MAX_EXPORT / 1024 / 1024)}MB 单次导出上限，请改用单个文件逐个下载`
-    });
   }
 
   const out = zip.toBuffer();
+  // EdgeOne caps response bodies near ~6MiB. Measure the ACTUAL compressed ZIP
+  // (uncompressed size is irrelevant); only bail out when the export itself no
+  // longer fits, in which case single-file downloads are the fallback.
+  const MAX_EXPORT = 6.0 * 1024 * 1024;
+  if (out.length > MAX_EXPORT) {
+    return res.status(413).json({
+      error: `导出包超过 ${Math.round(MAX_EXPORT / 1024 / 1024)}MB 平台响应上限，请改用单个文件逐个下载`
+    });
+  }
+
   const safe = `${(project.name || 'prototype').replace(/[\/\\:*?"<>|]/g, '_')}_v${project.version || 1}.zip`;
   res.set('Content-Disposition', `attachment; filename="${safe}"; filename*=UTF-8''${encodeURIComponent(safe)}`);
   res.type('application/zip');
