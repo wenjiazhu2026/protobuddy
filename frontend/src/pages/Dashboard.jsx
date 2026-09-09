@@ -32,6 +32,7 @@ export default function Dashboard() {
   const [deploying, setDeploying] = useState(false);
   const { showToast } = useToast();
   const [editing, setEditing] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
   const [manualUrl, setManualUrl] = useState('');
   const [showManualUrl, setShowManualUrl] = useState(false);
@@ -57,6 +58,28 @@ export default function Dashboard() {
   }, [id]);
 
   useEffect(() => { load(); }, [load]);
+
+  const handleExport = async () => {
+    if (exporting) return;
+    setExporting(true);
+    try {
+      const { blob, parts } = await api.exportProject(id);
+      const name = project?.name || 'prototype';
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${name.replace(/[\\/:*?"<>|]/g, '_')}_v${project?.version || 1}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 15000);
+      if (parts > 1) showToast(`已导出（${parts} 个分片已合并）`, 'success');
+    } catch (err) {
+      showToast(`导出失败：${err.message}`, 'error');
+    } finally {
+      setExporting(false);
+    }
+  };
 
   const handleUploadZip = async (e) => {
     const file = e.target.files[0];
@@ -387,14 +410,14 @@ export default function Dashboard() {
           <div className="file-tree-header">
             <span>文件列表 ({files.length})</span>
             {files.length > 0 && (
-              <a
+              <button
                 className="btn btn-sm btn-secondary file-export-btn"
-                href={api.exportUrl(id)}
-                download
+                onClick={handleExport}
+                disabled={exporting}
                 title="打包导出全部原型文件（ZIP）"
               >
-                ⬇ 导出全部
-              </a>
+                {exporting ? '打包中…' : '⬇ 导出全部'}
+              </button>
             )}
           </div>
           {files.length === 0 ? (

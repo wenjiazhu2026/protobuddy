@@ -88,14 +88,33 @@ router.get('/:id/export', async (req, res) => {
   }
 
   const out = zip.toBuffer();
-  // EdgeOne caps response bodies near ~6MiB. Measure the ACTUAL compressed ZIP
-  // (uncompressed size is irrelevant); only bail out when the export itself no
-  // longer fits, in which case single-file downloads are the fallback.
-  const MAX_EXPORT = 6.0 * 1024 * 1024;
-  if (out.length > MAX_EXPORT) {
-    return res.status(413).json({
-      error: `导出包超过 ${Math.round(MAX_EXPORT / 1024 / 1024)}MB 平台响应上限，请改用单个文件逐个下载`
-    });
+
+  // EdgeOne responses are capped near ~6MiB, so a large export ZIP is sliced
+  // into parts; the client requests part=<p>&parts=<N> and reassembles.
+  const PART_BYTES = 4 * 1024 * 1024;
+  const parts = Math.max(1, Math.ceil(out.length / PART_BYTES));
+  const reqPart = req.query.part === undefined ? null : parseInt(req.query.part, 10);
+  const reqParts = req.query.parts === undefined ? parts : parseInt(req.query.parts, 10);
+
+  if (reqParts !== parts) {
+    return res.status(400).json({ error: `Unexpected parts=${reqParts}` });
+  }
+  if (reqPart !== null) {
+    if (!Number.isInteger(reqPart) || reqPart < 0 || reqPart >= parts) {
+      return res.status(400).json({ error: `Invalid part=${reqPart}, parts=${parts}` });
+    }
+    const start = reqPart * PART_BYTES;
+    const end = Math.min(out.length, start + PART_BYTES);
+    res.set('X-Export-Parts', String(parts));
+    res.set('X-Export-Part', String(reqPart));
+    res.type('application/octet-stream');
+    return res.send(out.subarray(start, end));
+  }
+
+  if (out.length > 6.0 * 1024 * 1024) {
+    // Nothing below changed; tell the client how many parts to fetch.
+    res.set('X-Export-Parts', String(parts));
+    return res.status(413).json({ error: 'export-too-large', parts });
   }
 
   const safe = `${(project.name || 'prototype').replace(/[\/\\:*?"<>|]/g, '_')}_v${project.version || 1}.zip`;

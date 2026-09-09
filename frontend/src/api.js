@@ -223,8 +223,24 @@ export const api = {
     return `${API_BASE}/projects/${id}/files/${p}?download=1`;
   },
 
-  // Export the whole project as a ZIP.
-  exportUrl: (id) => `${API_BASE}/projects/${id}/export`,
+  // Download the whole project as a ZIP. The server may slice the archive into
+  // parts (platform response cap); fetch each and reassemble into one Blob.
+  exportProject: async (id) => {
+    const base = `${API_BASE}/projects/${id}/export`;
+    const first = await fetch(`${base}?part=0`);
+    if (!first.ok) {
+      const data = await first.json().catch(() => ({}));
+      throw new Error(data.error || `导出失败（HTTP ${first.status}）`);
+    }
+    const parts = parseInt(first.headers.get('x-export-parts') || '1', 10);
+    const bufs = [await first.arrayBuffer()];
+    for (let p = 1; p < parts; p++) {
+      const r = await fetch(`${base}?part=${p}&parts=${parts}`);
+      if (!r.ok) throw new Error(`导出分片 ${p + 1}/${parts} 下载失败（HTTP ${r.status}）`);
+      bufs.push(await r.arrayBuffer());
+    }
+    return { blob: new Blob(bufs, { type: 'application/zip' }), parts };
+  },
 };
 
 // Build preview URL for iframe (same-origin, served by the Express function)
