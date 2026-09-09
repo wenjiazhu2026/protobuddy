@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { api, getOwnerToken, buildRegenerateCmd } from '../api.js';
 import { useOwnerAuth } from '../components/OwnerAuthContext.jsx';
@@ -237,6 +237,16 @@ export default function Dashboard() {
     return ['html', 'css', 'js', 'json', 'txt', 'md', 'xml', 'svg'].includes(ext);
   };
 
+  // File list sorted by last update time, most recent first. Files without a
+  // timestamp are treated as oldest (they trail at the bottom).
+  const sortedFiles = useMemo(() => {
+    return [...files].sort((a, b) => {
+      const ta = a.updated_at ? +new Date(a.updated_at) : (a.created_at ? +new Date(a.created_at) : 0);
+      const tb = b.updated_at ? +new Date(b.updated_at) : (b.created_at ? +new Date(b.created_at) : 0);
+      return tb - ta;
+    });
+  }, [files]);
+
   if (loading) {
     return <div className="main-content"><div className="loading-container"><div className="spinner" /><span>加载中...</span></div></div>;
   }
@@ -380,7 +390,7 @@ export default function Dashboard() {
           {files.length === 0 ? (
             <div style={{ padding: 16, fontSize: 12, color: 'var(--text-muted)' }}>暂无文件，请上传原型（ZIP 包 / 文件夹 / index.html）</div>
           ) : (
-            files.map(f => (
+            sortedFiles.map(f => (
               <div
                 key={f.id}
                 className={`file-tree-item ${selectedFile?.id === f.id ? 'active' : ''}`}
