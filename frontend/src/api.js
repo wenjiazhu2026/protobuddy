@@ -215,6 +215,16 @@ export const api = {
 
   // Health
   health: () => request('/health'),
+
+  // Download single file (raw bytes) — use as an <a href> so the browser
+  // triggers the attachment download natively.
+  fileDownloadUrl: (id, filePath) => {
+    const p = String(filePath || '').split('/').map(encodeURIComponent).join('/');
+    return `${API_BASE}/projects/${id}/files/${p}?download=1`;
+  },
+
+  // Export the whole project as a ZIP.
+  exportUrl: (id) => `${API_BASE}/projects/${id}/export`,
 };
 
 // Build preview URL for iframe (same-origin, served by the Express function)

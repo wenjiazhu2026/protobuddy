@@ -385,7 +385,17 @@ export default function Dashboard() {
       <div className="dashboard-layout">
         <div className="file-tree">
           <div className="file-tree-header">
-            文件列表 ({files.length})
+            <span>文件列表 ({files.length})</span>
+            {files.length > 0 && (
+              <a
+                className="btn btn-sm btn-secondary file-export-btn"
+                href={api.exportUrl(id)}
+                download
+                title="打包导出全部原型文件（ZIP）"
+              >
+                ⬇ 导出全部
+              </a>
+            )}
           </div>
           {files.length === 0 ? (
             <div style={{ padding: 16, fontSize: 12, color: 'var(--text-muted)' }}>暂无文件，请上传原型（ZIP 包 / 文件夹 / index.html）</div>
@@ -403,6 +413,15 @@ export default function Dashboard() {
                     {formatFileTime(f.updated_at)}
                   </span>
                 )}
+                <a
+                  className="file-tree-dl"
+                  href={api.fileDownloadUrl(id, f.path)}
+                  download
+                  title={`下载 ${f.path.split('/').pop()}`}
+                  onClick={e => e.stopPropagation()}
+                >
+                  ⭳
+                </a>
               </div>
             ))
           )}

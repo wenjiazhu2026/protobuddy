@@ -1,9 +1,24 @@
 import { Router } from 'express';
+import AdmZip from 'adm-zip';
 import { getById, query, insert, update, remove } from '../db.js';
 import { readFileContent, writeFileContent, deleteFile, findEntryPoint, isBinaryFile, listProjectFiles } from '../services/fileStorage.js';
 import { requireOwnerAuth } from '../services/ownerAuth.js';
 
 const router = Router();
+
+const MIME_BY_EXT = {
+  png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif',
+  webp: 'image/webp', svg: 'image/svg+xml', ico: 'image/x-icon',
+  woff: 'font/woff', woff2: 'font/woff2', ttf: 'font/ttf', eot: 'application/vnd.ms-fontobject', otf: 'font/otf',
+  mp4: 'video/mp4', mp3: 'audio/mpeg', pdf: 'application/pdf', zip: 'application/zip', rar: 'application/vnd.rar',
+  html: 'text/html; charset=utf-8', htm: 'text/html; charset=utf-8', css: 'text/css; charset=utf-8',
+  js: 'text/javascript; charset=utf-8', json: 'application/json; charset=utf-8',
+  txt: 'text/plain; charset=utf-8', md: 'text/markdown; charset=utf-8', xml: 'text/xml; charset=utf-8'
+};
+function mimeFor(filePath) {
+  const ext = (String(filePath || '').split('.').pop() || '').toLowerCase();
+  return MIME_BY_EXT[ext] || null;
+}
 
 // List files for a project
 router.get('/:id/files', async (req, res) => {
@@ -34,7 +49,60 @@ router.get('/:id/files/*', async (req, res) => {
   const content = await readFileContent(req.params.id, filePath);
   if (!content) return res.status(404).json({ error: 'File not found' });
 
+  // ?download=1  -> stream the actual bytes with a download disposition
+  if (String(req.query.download) === '1') {
+    const name = filePath.split('/').pop() || 'file';
+    res.set('Content-Disposition', `attachment; filename="${name}"; filename*=UTF-8''${encodeURIComponent(name)}`);
+    res.set('X-Content-Type-Options', 'nosniff');
+    if (content.binary) {
+      const buf = Buffer.from(content.data, 'base64');
+      const type = mimeFor(filePath) || 'application/octet-stream';
+      res.type(type);
+      return res.send(buf);
+    }
+    res.type('text/plain; charset=utf-8');
+    return res.send(String(content.data));
+  }
+
   res.json({ path: filePath, ...content });
+});
+
+// Export every project file as a single ZIP (browser download). Source of
+// truth is the storage driver listing, not the DB table.
+router.get('/:id/export', async (req, res) => {
+  const project = await getById('projects', req.params.id);
+  if (!project) return res.status(404).json({ error: 'Project not found' });
+
+  const paths = await listProjectFiles(req.params.id);
+  if (!paths.length) return res.status(404).json({ error: 'No files in project' });
+
+  const zip = new AdmZip();
+  let total = 0;
+  for (const p of paths) {
+    const content = await readFileContent(req.params.id, p);
+    if (!content) continue;
+    if (content.binary) {
+      zip.addFile(p, Buffer.from(content.data, 'base64'));
+    } else {
+      zip.addFile(p, Buffer.from(String(content.data), 'utf-8'));
+    }
+    total += content.binary ? content.data.length * 3 / 4 : Buffer.byteLength(String(content.data), 'utf-8');
+  }
+
+  // EdgeOne caps response bodies at ~6MiB; stream something comfortably below.
+  // Larger projects should be downloaded file-by-file instead.
+  const MAX_EXPORT = 5.5 * 1024 * 1024;
+  if (total > MAX_EXPORT) {
+    return res.status(413).json({
+      error: `原型总大小超过 ${Math.round(MAX_EXPORT / 1024 / 1024)}MB 单次导出上限，请改用单个文件逐个下载`
+    });
+  }
+
+  const out = zip.toBuffer();
+  const safe = `${(project.name || 'prototype').replace(/[\/\\:*?"<>|]/g, '_')}_v${project.version || 1}.zip`;
+  res.set('Content-Disposition', `attachment; filename="${safe}"; filename*=UTF-8''${encodeURIComponent(safe)}`);
+  res.type('application/zip');
+  res.send(out);
 });
 
 // Write/update a file's content — owner maintenance operation
