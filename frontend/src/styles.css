@@ -625,7 +625,9 @@ button {
   left: 0;
   width: 100%;
   height: 100%;
-  z-index: 10;
+  /* no z-index: keep this layer from becoming its own stacking context so the
+     annotation draft box (z-index 2100) can rise above toasts/menus/modals */
+  z-index: auto;
 }
 
 .annotation-overlay.mode-annotate {

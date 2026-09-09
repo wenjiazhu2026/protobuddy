@@ -524,8 +524,11 @@ function PreviewFrame({ projectId, version, annotateMode, onAnnotate, annotation
               position: 'absolute',
               left: `${Math.min(Math.max(draft.x, 8), 92)}%`,
               top: `${Math.min(Math.max(draft.y, 8), 92)}%`,
-              transform: 'translate(-50%, -100%)',
-              zIndex: 20,
+              // Draw below the anchor point except near the bottom edge, so the
+              // box is never clipped by the preview's overflow:hidden.
+              transform: draft.y > 85 ? 'translate(-50%, -100%)' : 'translate(-50%, 12px)',
+              // Always stay on top (above toasts 2000 / modals 1000 / topbar 100)
+              zIndex: 2100,
               width: 260,
               background: 'white',
               border: '1px solid var(--border)',
