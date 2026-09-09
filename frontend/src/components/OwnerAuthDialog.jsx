@@ -49,7 +49,7 @@ export default function OwnerAuthDialog({
         </div>
         <div className="modal-body">
           <div style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 12 }}>
-            此操作（项目维护 / 文件上传 / 部署 / 方案审核 / 方案应用）需要验证原型 owner 操作密码。
+            输入原型 owner 操作密码后，项目维护 / 文件上传 / 部署 / 方案审核 / 方案应用等受保护操作将无需再次输入。
           </div>
           {error && (
             <div className="auth-error">
@@ -76,7 +76,7 @@ export default function OwnerAuthDialog({
             style={{ marginTop: 4 }}
           />
           <div className="auth-note">
-            验证通过后，本会话内（浏览器会话期间）执行其他受保护操作无需重复输入密码。
+            验证通过后当前浏览器会话内长期有效（口令会话不再自动过期）；关闭浏览器或清除会话数据后需重新输入。
           </div>
         </div>
         <div className="modal-footer">

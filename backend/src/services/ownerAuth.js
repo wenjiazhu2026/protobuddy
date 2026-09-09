@@ -29,10 +29,13 @@ const DEFAULT_LOCK_MS = 5 * 60 * 1000;             // lock duration: 5min
 
 /** Read config lazily so env set by the Makers entry (or the platform) is honored. */
 export function getOwnerConfig() {
+  // OWNER_AUTH_TTL_MS unset / <= 0 => token never expires (session-scoped;
+  // cleared only when the browser session ends). A positive value re-enables expiry.
+  const ttlRaw = parseInt(process.env.OWNER_AUTH_TTL_MS || '', 10);
   return {
     password: process.env.OWNER_PASSWORD || '',
     secret: process.env.OWNER_AUTH_SECRET || '',
-    ttlMs: parseInt(process.env.OWNER_AUTH_TTL_MS || '', 10) || DEFAULT_TTL_MS,
+    ttlMs: Number.isFinite(ttlRaw) && ttlRaw > 0 ? ttlRaw : 0,
     maxAttempts: parseInt(process.env.OWNER_AUTH_MAX_ATTEMPTS || '', 10) || DEFAULT_MAX_ATTEMPTS,
     lockMs: parseInt(process.env.OWNER_AUTH_LOCK_MS || '', 10) || DEFAULT_LOCK_MS
   };
@@ -59,9 +62,12 @@ function sign(payloadB64) {
   return crypto.createHmac('sha256', secret).update(payloadB64).digest('hex');
 }
 
-/** Issue a signed session token for a project. Throws when not configured. */
+/** Issue a signed session token for a project. Throws when not configured.
+ *  ttlMs > 0 embeds an `e` expiry; ttlMs = 0 issues a non-expiring token. */
 export function issueToken(projectId) {
-  const payload = { p: String(projectId), e: Date.now() + getOwnerConfig().ttlMs };
+  const ttl = getOwnerConfig().ttlMs;
+  const payload = { p: String(projectId) };
+  if (ttl > 0) payload.e = Date.now() + ttl;
   const b64 = Buffer.from(JSON.stringify(payload)).toString('base64url');
   return `v1.${b64}.${sign(b64)}`;
 }
@@ -79,7 +85,8 @@ export function verifyOwnerToken(projectId, token) {
   try {
     const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'));
     if (String(payload.p) !== String(projectId)) return false;
-    if (!payload.e || Date.now() > payload.e) return false;
+    // `e` is optional: only reject when an expiry was embedded AND it passed.
+    if (payload.e && Date.now() > payload.e) return false;
     return true;
   } catch {
     return false;
@@ -151,7 +158,7 @@ export async function verifyOwnerPassword(projectId, password) {
   const input = typeof password === 'string' ? password : '';
   if (safeEqual(input, cfg.password)) {
     await setAuthState(projectId, { failures: 0, locked_until: 0 });
-    return { ok: true, token: issueToken(projectId), expiresIn: cfg.ttlMs, expiresAt: now + cfg.ttlMs };
+    return { ok: true, token: issueToken(projectId), expiresIn: cfg.ttlMs > 0 ? cfg.ttlMs : null, expiresAt: cfg.ttlMs > 0 ? now + cfg.ttlMs : null };
   }
 
   const failures = (state.failures || 0) + 1;

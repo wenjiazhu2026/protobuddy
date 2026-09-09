@@ -7,7 +7,8 @@ import PlanReview from './pages/PlanReview.jsx';
 import Settings from './pages/Settings.jsx';
 import Tasks from './pages/Tasks.jsx';
 import TaskDetail from './pages/TaskDetail.jsx';
-import { OwnerAuthProvider } from './components/OwnerAuthContext.jsx';
+import { OwnerAuthProvider, useOwnerAuth } from './components/OwnerAuthContext.jsx';
+import { getOwnerToken } from './api.js';
 import ProjectNav from './components/ProjectNav.jsx';
 import { projectTabs } from './components/projectTabs.js';
 import { ToastProvider } from './components/ToastContext.jsx';
@@ -34,6 +35,7 @@ function CloseIcon() {
 function TopBar() {
   const location = useLocation();
   const [menuOpen, setMenuOpen] = useState(false);
+  const { openPasswordDialog } = useOwnerAuth();
   const isActive = (path) => location.pathname === path || location.pathname.startsWith(path + '/');
 
   // 提取项目 id（若在项目内路由），汉堡菜单追加项目 Tab
@@ -41,6 +43,9 @@ function TopBar() {
     ? location.pathname.split('/')[2]
     : null;
   const tabs = projectId ? projectTabs(projectId) : [];
+  let authed = false;
+  let authToken = '';
+  try { authToken = getOwnerToken(projectId); authed = !!authToken; } catch { /* ignore */ }
 
   return (
     <div className="topbar">
@@ -54,6 +59,20 @@ function TopBar() {
       <nav className="topbar-nav">
         <Link to="/" className={isActive('/') && location.pathname === '/' ? 'active' : ''}>项目</Link>
       </nav>
+      <button
+        className={'topbar-auth-btn' + (authed ? ' authed' : '')}
+        onClick={() => projectId && openPasswordDialog(projectId)}
+        disabled={!projectId}
+        title={projectId
+          ? (authed ? '操作密码已通过，会话不再过期（退出浏览器后需重新输入）' : '输入 / 更新操作密码')
+          : '请先进入一个项目后再输入操作密码'}
+      >
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+          <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+        </svg>
+        {authed ? '已认证' : '操作密码'}
+      </button>
       <button
         className="hamburger-btn"
         onClick={() => setMenuOpen((v) => !v)}

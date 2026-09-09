@@ -102,7 +102,19 @@ export function OwnerAuthProvider({ children }) {
     if (pending) pending.reject(new Error('owner verification cancelled'));
   }, []);
 
-  const contextValue = { guard };
+  /**
+   * Manually open the password dialog (导航栏固定入口「操作密码」)。
+   * Unlike guard(), no pending action is attached — a success just stores the
+   * session token and closes. Can be invoked anytime to (re)enter / refresh
+   * the操作密码 (token no longer expires; it lives for the browser session).
+   */
+  const openPasswordDialog = useCallback((projectId) => {
+    if (!projectId) return;
+    pendingRef.current = null;
+    showDialog(projectId, {});
+  }, [showDialog]);
+
+  const contextValue = { guard, openPasswordDialog };
 
   return (
     <OwnerAuthContext.Provider value={contextValue}>

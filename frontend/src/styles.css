@@ -252,6 +252,27 @@ button {
 .topbar-nav a:hover { background: var(--bg); color: var(--text); }
 .topbar-nav a.active { background: var(--primary-light); color: var(--primary); }
 
+/* 导航栏固定入口：操作密码（输入 / 更新） */
+.topbar-auth-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  margin-left: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s;
+}
+.topbar-auth-btn:hover:not(:disabled) { background: var(--bg-hover); color: var(--text); }
+.topbar-auth-btn:disabled { opacity: 0.55; cursor: not-allowed; }
+.topbar-auth-btn.authed { color: #16a34a; border-color: #16a34a; }
+
 /* 汉堡菜单按钮：桌面隐藏，<768 显示 */
 .hamburger-btn {
   display: none;
