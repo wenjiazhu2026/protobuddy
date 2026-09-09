@@ -261,8 +261,10 @@ function injectEditorBootstrap(html) {
     '}' +
     'function disable(){if(active&&window.HVE_Core){window.HVE_Core.disable()}active=false;report();}' +
     'window.addEventListener("message",function(e){' +
-    'var d=e.data;if(!d||typeof d.__pbEdit==="undefined")return;' +
-    'if(d.__pbEdit.v===1)enable();else disable();' +
+    'var d=e.data;if(!d)return;' +
+    'if(typeof d.__pbEdit!=="undefined"){if(d.__pbEdit.v===1)enable();else disable();return}' +
+    // Outer app "保存到项目" button -> ask the editor (once loaded) to save.
+    'if(d.__pbAskSave===1){if(active&&window.HVE_Core){window.HVE_Core.saveCurrentFile()}}' +
     '});' +
     '})();</script>';
 

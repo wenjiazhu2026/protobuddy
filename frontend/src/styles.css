@@ -1243,7 +1243,7 @@ button {
 }
 
 /* ===================== 任务清单模块 ===================== */
-.btn-accent { background: var(--primary); }
+.btn-accent { background: var(--primary); color: white; }
 .btn-accent:hover { background: var(--primary-dark); }
 
 .modal-title { font-weight: 600; font-size: 15px; }

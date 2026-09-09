@@ -14,6 +14,9 @@ export default function Review() {
   const [annotations, setAnnotations] = useState([]);
   const [annotateMode, setAnnotateMode] = useState(false);
   const [editMode, setEditMode] = useState(false);
+  // Whether the in-iframe editor actually booted (acks via __pbEditReady).
+  // The outer 保存到项目 button stays disabled until the editor is live.
+  const [editorReady, setEditorReady] = useState(false);
   const [activeAnnotationId, setActiveAnnotationId] = useState(null);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
@@ -30,6 +33,7 @@ export default function Review() {
   // message listener is not re-registered on every render).
   const handleEditStateChange = useCallback((active) => {
     setEditMode(!!active);
+    setEditorReady(!!active);
   }, []);
 
   useEffect(() => {
@@ -129,6 +133,7 @@ export default function Review() {
       await guard(id, () => api.writeFile(id, page, html, getOwnerToken(id)));
       setProject(p => ({ ...p, version: (p.version || 1) + 1 }));
       setEditMode(false);
+      setEditorReady(false);
       showToast(`已保存到项目 · ${page.split('/').pop()}`, 'success');
       return { ok: true };
     } catch (err) {
@@ -192,10 +197,23 @@ export default function Review() {
           <h1 className="page-title">{project.name} · 评审</h1>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
+          {editMode && (
+            <button
+              className="btn btn-primary"
+              onClick={() => previewRef.current?.saveCurrentPage()}
+              disabled={!editorReady}
+              title={editorReady
+                ? '把当前编辑页的改动写回平台存储（需 owner 密码）'
+                : '编辑器正在加载，请稍候…'}
+            >
+              💾 保存到项目
+            </button>
+          )}
           <button
             className={`btn ${editMode ? 'btn-accent' : 'btn-secondary'}`}
             onClick={() => {
               if (!editMode && annotateMode) setAnnotateMode(false);
+              setEditorReady(false);
               setEditMode(!editMode);
             }}
             disabled={!hasPreview}

@@ -59,6 +59,10 @@ function PreviewFrame({ projectId, version, annotateMode, onAnnotate, annotation
   const draftInputRef = useRef(null);
   const editModeRef = useRef(editMode);
   const pendingEditRef = useRef(null);
+  // Ack: whether the iframe confirmed the editor became active (__pbEditReady).
+  // Used to keep (re)sending the mode message until the iframe acknowledges,
+  // so a toggle clicked while the preview is still booting is not silently lost.
+  const editAckRef = useRef(false);
 
   const [iframeKey, setIframeKey] = useState(0);
   const [scrollPos, setScrollPos] = useState({ x: 0, y: 0 });
@@ -119,6 +123,31 @@ function PreviewFrame({ projectId, version, annotateMode, onAnnotate, annotation
   // bootstrap, so the mode message must be re-sent).
   useEffect(() => {
     sendEditMode(0);
+  }, [editMode, sendEditMode]);
+
+  // Reliability: after toggling edit mode, keep (re)sending the mode message
+  // until the iframe acks with __pbEditReady. Otherwise a click that lands
+  // while the preview document (or the editor's module scripts) is still
+  // loading is lost and the mode only seems to "take" on a second click.
+  useEffect(() => {
+    if (!editMode) {
+      editAckRef.current = false;
+      return;
+    }
+    editAckRef.current = false;
+    sendEditMode(0);
+    const iv = setInterval(() => {
+      if (editAckRef.current) {
+        clearInterval(iv);
+        return;
+      }
+      sendEditMode(0);
+    }, 350);
+    const t = setTimeout(() => clearInterval(iv), 15000);
+    return () => {
+      clearInterval(iv);
+      clearTimeout(t);
+    };
   }, [editMode, sendEditMode]);
 
   useEffect(() => {
@@ -236,6 +265,7 @@ function PreviewFrame({ projectId, version, annotateMode, onAnnotate, annotation
       setElementPositions(prev => ({ ...prev, [d.id]: d.found ? d : null }));
     } else if (d.__pbEditReady) {
       // Visual editor became active/ready inside the iframe -> inform parent
+      editAckRef.current = !!d.active;
       onEditStateChange?.(!!d.active);
     } else if (d.__pbEditExit) {
       // User pressed the in-page "退出" button; parent should resync its toggle
@@ -307,8 +337,20 @@ function PreviewFrame({ projectId, version, annotateMode, onAnnotate, annotation
         // Keep the editor active across sub-page navigations.
         if (editModeRef.current) sendEditMode(300);
       }
+    },
+    // Ask the in-iframe editor to serialize+save the current page. The editor
+    // replies through its normal __pbSave flow (owner-gated by the parent).
+    saveCurrentPage: () => {
+      const iframe = iframeRef.current;
+      if (!iframe) return false;
+      try {
+        iframe.contentWindow?.postMessage({ __pbAskSave: 1 }, allowedOrigin);
+        return true;
+      } catch (_) {
+        return false;
+      }
     }
-  }), [previewUrl, onPageChange, sendEditMode]);
+  }), [previewUrl, onPageChange, sendEditMode, allowedOrigin]);
 
   // Clean up timers and rAF on unmount
   useEffect(() => {
@@ -480,6 +522,11 @@ function PreviewFrame({ projectId, version, annotateMode, onAnnotate, annotation
         className="preview-iframe"
         title="Prototype Preview"
         sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
+        onLoad={() => {
+          // A fresh iframe document carries a fresh editor bootstrap; re-apply
+          // the current mode so a quick toggle right after load is not missed.
+          if (editModeRef.current) sendEditMode(0);
+        }}
       />
       {/* Transparent overlay - sits on top of iframe, same size.
           In visual-edit mode the pointer must reach the iframe (the editor
