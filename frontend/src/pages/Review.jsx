@@ -269,26 +269,29 @@ export default function Review() {
             <span className="badge badge-blue" title="评审预览固定从平台存储读取（编辑、保存也写平台存储），与 EdgeOne 线上版本无关；线上版本仅在点击重新部署后更新">
               平台存储 v{project.version || 1}
             </span>
-            {htmlPages.length > 1 && (
-              <select
-                className="page-switcher"
-                value={htmlPages.some(p => p.path === currentPage) ? currentPage : '__other__'}
-                title="手动切换页面"
-                aria-label="切换页面"
-                onChange={(e) => {
-                  const page = e.target.value;
-                  if (page && page !== '__other__' && page !== currentPage) {
-                    previewRef.current?.navigateTo(page);
-                  }
-                }}
-              >
-                {!htmlPages.some(p => p.path === currentPage) && (
-                  <option value="__other__">{currentPage.split('/').pop()}</option>
-                )}
-                {htmlPages.map(({ path, label }) => (
-                  <option key={path} value={path}>{label}</option>
-                ))}
-              </select>
+            {htmlPages.length > 0 && (
+              <label className="page-switcher-label">
+                <span>页面</span>
+                <select
+                  className="page-switcher"
+                  value={htmlPages.some(p => p.path === currentPage) ? currentPage : '__other__'}
+                  title="当前页 · 可手动切换"
+                  aria-label="切换页面"
+                  onChange={(e) => {
+                    const page = e.target.value;
+                    if (page && page !== '__other__' && page !== currentPage) {
+                      previewRef.current?.navigateTo(page);
+                    }
+                  }}
+                >
+                  {!htmlPages.some(p => p.path === currentPage) && (
+                    <option value="__other__">{currentPage.split('/').pop()}</option>
+                  )}
+                  {htmlPages.map(({ path, label }) => (
+                    <option key={path} value={path}>{label}</option>
+                  ))}
+                </select>
+              </label>
             )}
             {project.deploy_method === 'edgeone' || project.deploy_method === 'edgeone_manual' ? (
               project.current_url && project.current_url.startsWith('http') ? (
@@ -318,9 +321,6 @@ export default function Review() {
               <span className="badge badge-orange" style={{ animation: 'pulse 1.5s infinite' }}>
                 批注模式 · 点击任意位置
               </span>
-            )}
-            {currentPage !== 'index.html' && (
-              <span className="badge badge-blue" title={currentPage}>当前页 · {currentPage.split('/').pop()}</span>
             )}
           </div>
           {hasPreview ? (

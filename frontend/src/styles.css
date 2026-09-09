@@ -619,6 +619,13 @@ button {
 }
 
 /* Manual page switcher dropdown in the preview toolbar */
+.page-switcher-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
 .page-switcher {
   max-width: 220px;
   font-size: 13px;
