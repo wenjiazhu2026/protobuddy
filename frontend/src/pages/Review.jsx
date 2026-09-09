@@ -249,7 +249,7 @@ export default function Review() {
         <div className="preview-container">
           <div className="preview-toolbar">
             <span style={{ fontWeight: 500, fontSize: 13 }}>原型预览</span>
-            <span className="badge badge-blue" title="评审预览从平台存储读取，与 EdgeOne 部署为同源文件">
+            <span className="badge badge-blue" title="评审预览固定从平台存储读取（编辑、保存也写平台存储），与 EdgeOne 线上版本无关；线上版本仅在点击重新部署后更新">
               平台存储 v{project.version || 1}
             </span>
             {project.deploy_method === 'edgeone' || project.deploy_method === 'edgeone_manual' ? (

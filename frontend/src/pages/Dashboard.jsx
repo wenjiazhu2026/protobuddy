@@ -330,6 +330,25 @@ export default function Dashboard() {
           </div>
         </div>
         <div className="card-body">
+          {/* Storage vs deployed version mismatch after an upload: uploading files
+              never auto-deploys to EdgeOne, only the 重新部署 button does. */}
+          {(() => {
+            const storageV = project.version || 0;
+            const dep = lastDeploy && lastDeploy.status === 'success' ? lastDeploy : null;
+            const deployedV = dep ? (dep.version || 0) : 0;
+            const stale = project.status === 'uploaded' && dep && storageV > deployedV;
+            const neverDeployed = (files.length > 0 || project.current_url) && !dep && project.status !== 'deploying';
+            if (!stale && !neverDeployed) return null;
+            return (
+              <div style={{ padding: '10px 12px', background: 'var(--info-bg, #eef6ff)', border: '1px solid var(--info-border, #b7d7fb)', borderRadius: 6, marginBottom: 12, fontSize: 13, color: 'var(--text)' }}>
+                <span style={{ fontWeight: 600 }}>⚠ 平台存储 v{storageV} 尚未部署到线上</span>
+                <div style={{ marginTop: 2, fontSize: 12, color: 'var(--text-muted)' }}>
+                  上传/编辑文件后<b>不会自动部署</b>到 EdgeOne。如需更新线上版本，请点击右上角「
+                  {project.current_url ? '重新部署' : '部署'}」按钮；评审预览已即时使用最新平台存储内容。
+                </div>
+              </div>
+            );
+          })()}
           {lastDeploy && (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center', fontSize: 13, color: 'var(--text-muted)', marginBottom: 12 }}>
               <span style={{ fontWeight: 600, color: 'var(--text)' }}>最近一次部署</span>
