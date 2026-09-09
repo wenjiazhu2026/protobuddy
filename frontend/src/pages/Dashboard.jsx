@@ -336,7 +336,7 @@ export default function Dashboard() {
             const storageV = project.version || 0;
             const dep = lastDeploy && lastDeploy.status === 'success' ? lastDeploy : null;
             const deployedV = dep ? (dep.version || 0) : 0;
-            const stale = project.status === 'uploaded' && dep && storageV > deployedV;
+            const stale = dep && storageV > deployedV;
             const neverDeployed = (files.length > 0 || project.current_url) && !dep && project.status !== 'deploying';
             if (!stale && !neverDeployed) return null;
             return (
