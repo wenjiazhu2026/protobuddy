@@ -14,6 +14,13 @@ function formatFileTime(iso) {
   if (diff < HOUR) return Math.floor(diff / MIN) + ' 分钟前';
   if (diff < DAY) return Math.floor(diff / HOUR) + ' 小时前';
   if (diff < 30 * DAY) return Math.floor(diff / DAY) + ' 天前';
+  return formatDateTime(iso);
+}
+
+function formatDateTime(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
   const p = n => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
@@ -323,6 +330,18 @@ export default function Dashboard() {
           </div>
         </div>
         <div className="card-body">
+          {lastDeploy && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center', fontSize: 13, color: 'var(--text-muted)', marginBottom: 12 }}>
+              <span style={{ fontWeight: 600, color: 'var(--text)' }}>最近一次部署</span>
+              <span title={formatDateTime(lastDeploy.created_at)}>
+                {formatFileTime(lastDeploy.created_at)}（{formatDateTime(lastDeploy.created_at)}）
+              </span>
+              {lastDeploy.version > 0 && <span className="badge badge-blue">v{lastDeploy.version}</span>}
+              <span className={`badge ${lastDeploy.status === 'success' ? 'badge-green' : lastDeploy.status === 'deploying' ? 'badge-blue' : lastDeploy.status === 'failed' || lastDeploy.status === 'deploy_failed' ? 'badge-red' : 'badge-gray'}`}>
+                {lastDeploy.status === 'success' ? '部署成功' : lastDeploy.status === 'deploying' ? '构建中' : lastDeploy.status === 'failed' || lastDeploy.status === 'deploy_failed' ? '部署失败' : '进行中'}
+              </span>
+            </div>
+          )}
           {regenerateInfo && regenerateInfo.regenerateRequired && (
             <div className="regenerate-banner" style={{ marginBottom: 12 }}>
               <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 6 }}>
