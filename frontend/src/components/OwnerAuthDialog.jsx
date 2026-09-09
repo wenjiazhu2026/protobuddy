@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 /**
  * Owner operation password dialog.
@@ -17,6 +17,16 @@ export default function OwnerAuthDialog({
   const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const locked = (lockRemainingMs || 0) > 0;
+
+  // Esc closes the dialog. Without this the full-screen transparent overlay
+  // keeps swallowing every click (including on the buttons behind it), which
+  // made the surrounding UI feel like "clicks don't register until repeated".
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e) => { if (e.key === 'Escape') onCancel(); };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [open, onCancel]);
 
   if (!open) return null;
 
