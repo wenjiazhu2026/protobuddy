@@ -216,10 +216,14 @@ export default function Review() {
               setEditorReady(false);
               setEditMode(!editMode);
             }}
-            disabled={!hasPreview}
-            title="直接拖拽/双击编辑 HTML 原型，改完点「保存到项目」写回平台存储"
+            disabled={!hasPreview || (editMode && !editorReady)}
+            title={editMode && !editorReady
+              ? '编辑器正在加载，请稍候…'
+              : '直接拖拽/双击编辑 HTML 原型，改完点「保存到项目」写回平台存储'}
           >
-            {editMode ? '◉ 编辑模式中…' : '🖱 可视化编辑'}
+            {editMode && !editorReady
+              ? '⏳ 编辑器加载中…'
+              : editMode ? '◉ 编辑模式中' : '🖱 可视化编辑'}
           </button>
           <button
             className={`btn ${annotateMode ? 'btn-danger' : 'btn-primary'}`}

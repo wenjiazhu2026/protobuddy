@@ -294,65 +294,79 @@ function injectScrollSyncScript(html) {
 function injectEditorBootstrap(html) {
   if (!html || html.indexOf('__pbEditorBootstrap') !== -1) return html;
 
+  // The whole injected editor bootstrap. It is a small LAZY loader, not the
+  // editor itself:
+  //  - pre-warms by loading the editor modules on document load (parallel),
+  //  - waits for the parent review page to send {__pbEdit:{v:1}} and then
+  //    enables via HVE_Core.enable() (or disables on v:0),
+  //  - asks the editor to save when it receives {__pbAskSave:1}.
+  // data-hve-editor lets the HTML serializer strip all of it from saved output.
   const script = '<script data-hve-editor="true" data-proto-editor="true">' +
-    '/*__pbEditorBootstrap*/(function(){' +
-    'if(window.__pbEditorInit)return;window.__pbEditorInit=1;' +
-    // Editor static base: the preview lives in the same origin as the editor
-    // assets, but the correct mount differs per runtime:
-    //   - EdgeOne Makers (prod): dist/editor/ -> static hosting at /editor/
-    //   - local single-server:    frontend build served by Express -> /editor/
-    //   - local two-server dev:   preview iframe origin is this app -> /api/editor/
-    // Probe both with a same-origin XHR and use whichever answers 200.
-    'var editorBases=["/editor/","/api/editor/"],BASE=null;' +
-    'var MODULES=["html-serializer.js","proto-file-manager.js","history.js","selector.js","drag-move.js","resize.js","text-edit.js","table-edit.js","image-handler.js","align-guide.js","toolbar.js","insert-panel.js","context-menu.js","editor-core.js"];' +
-    'var active=false,loading=false;' +
-    'function report(){try{window.parent.postMessage({__pbEditReady:1,active:active},"*")}catch(e){}}' +
-    'function resolveBase(cb){' +
-    'if(BASE){cb(BASE);return}' +
-    'var i=0;' +
-    '(function probe(){' +
-    'if(i>=editorBases.length){cb(null);return}' +
-    'var b=editorBases[i++];' +
-    'var x=new XMLHttpRequest();' +
-    'try{x.open("GET",b+"editor.css",true);}catch(e){probe();return}' +
-    'x.onloadend=function(){if(x.status>=200&&x.status<300){BASE=b;cb(b)}else probe()};' +
-    'x.onerror=function(){probe()};' +
-    'x.send();' +
-    '})();' +
-    '}' +
-    'function loadModules(){if(loading)return Promise.resolve(true);' +
-    'loading=true;' +
-    'return new Promise(function(res){' +
-    'resolveBase(function(ok){' +
-    'if(!ok){loading=false;res(false);return}' +
-    'var css=document.createElement("link");css.rel="stylesheet";css.href=BASE+"editor.css";css.setAttribute("data-hve-editor","true");' +
-    '(document.head||document.documentElement).appendChild(css);' +
-    'var i=0,body=document.body||document.documentElement;' +
-    'function next(){' +
-    'if(i>=MODULES.length){loading=false;res(true);return}' +
-    'var s=document.createElement("script");s.src=BASE+"modules/"+MODULES[i];s.setAttribute("data-hve-editor","true");' +
-    's.onload=s.onerror=function(){i++;next()};' +
-    'body.appendChild(s);' +
-    '}next();' +
-    '});' +
-    '});' +
-    '}' +
-    'function enable(){' +
-    'if(active)return report();' +
-    'if(window.HVE_Core){window.HVE_Core.enable();active=true;report();return}' +
-    'loadModules().then(function(ok){' +
-    'if(ok&&window.HVE_Core){window.HVE_Core.enable();active=true;}' +
-    'report();' +
-    '});' +
-    '}' +
-    'function disable(){if(active&&window.HVE_Core){window.HVE_Core.disable()}active=false;report();}' +
-    'window.addEventListener("message",function(e){' +
-    'var d=e.data;if(!d)return;' +
-    'if(typeof d.__pbEdit!=="undefined"){if(d.__pbEdit.v===1)enable();else disable();return}' +
-    // Outer app "保存到项目" button -> ask the editor (once loaded) to save.
-    'if(d.__pbAskSave===1){if(active&&window.HVE_Core){window.HVE_Core.saveCurrentFile()}}' +
-    '});' +
-    '})();</script>';
+`/*__pbEditorBootstrap*/
+(function(){
+  if (window.__pbEditorInit) return;
+  window.__pbEditorInit = 1;
+  var editorBases = ["/editor/", "/api/editor/"], BASE = null;
+  var MODULES = ["html-serializer.js","proto-file-manager.js","history.js","selector.js","drag-move.js","resize.js","text-edit.js","table-edit.js","image-handler.js","align-guide.js","toolbar.js","insert-panel.js","context-menu.js","editor-core.js"];
+  var active = false, loading = false;
+  function report(){ try { window.parent.postMessage({ __pbEditReady:1, active:active }, "*"); } catch(e){} }
+  function resolveBase(cb){
+    if (BASE) return cb(BASE);
+    var i = 0;
+    (function probe(){
+      if (i >= editorBases.length) return cb(null);
+      var b = editorBases[i++];
+      var x = new XMLHttpRequest();
+      try { x.open("GET", b + "editor.css", true); } catch(e){ return probe(); }
+      x.onloadend = function(){ if (x.status >= 200 && x.status < 300) { BASE = b; cb(b); } else probe(); };
+      x.onerror = probe;
+      x.send();
+    })();
+  }
+  function loadModules(){
+    if (loading) return Promise.resolve(true);
+    loading = true;
+    // Parallel module download; classic <script> tags still execute in injection
+    // order, so editor-core.js (appended last) initializes last.
+    return new Promise(function(res){
+      resolveBase(function(ok){
+        if (!ok) { loading = false; return res(false); }
+        var css = document.createElement("link");
+        css.rel = "stylesheet"; css.href = BASE + "editor.css";
+        css.setAttribute("data-hve-editor", "true");
+        (document.head || document.documentElement).appendChild(css);
+        var total = MODULES.length, done = 0, target = document.body || document.documentElement;
+        for (var i = 0; i < total; i++) {
+          (function(name){
+            var s = document.createElement("script");
+            s.src = BASE + "modules/" + name;
+            s.setAttribute("data-hve-editor", "true");
+            s.onload = s.onerror = function(){ done++; if (done >= total) { loading = false; res(true); } };
+            target.appendChild(s);
+          })(MODULES[i]);
+        }
+      });
+    });
+  }
+  function enable(){
+    if (active) return report();
+    if (window.HVE_Core) { window.HVE_Core.enable(); active = true; return report(); }
+    loadModules().then(function(ok){
+      if (ok && window.HVE_Core) { window.HVE_Core.enable(); active = true; }
+      report();
+    });
+  }
+  function disable(){ if (active && window.HVE_Core) window.HVE_Core.disable(); active = false; report(); }
+  window.addEventListener("message", function(e){
+    var d = e.data;
+    if (!d) return;
+    if (typeof d.__pbEdit !== "undefined") { d.__pbEdit.v === 1 ? enable() : disable(); return; }
+    if (d.__pbAskSave === 1 && active && window.HVE_Core) window.HVE_Core.saveCurrentFile();
+  });
+  // Pre-warm: load the editor modules in the background right away, so the
+  // very first 可视化编辑 press toggles in roughly a page-load, not 10-15s.
+  loadModules();
+})();</script>`;
 
   if (html.toLowerCase().indexOf('</body>') !== -1) {
     return html.replace(/<\/body>/i, script + '</body>');
