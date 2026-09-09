@@ -199,6 +199,9 @@ function PreviewFrame({ projectId, version, annotateMode, onAnnotate, annotation
         id: ann.id,
         elementId: ann.element_info?.id || '',
         path: ann.element_info?.path || '',
+        // Scope resolution to the modal the annotation was made in, so a
+        // same-shaped element in another level/layer is never matched.
+        modalId: ann.element_info?.modalId || '',
         // For old annotations without element_info, try to locate the element by
         // extracting a short keyword from the annotation content.
         text: (ann.element_info?.text || ann.content || '').slice(0, 120)

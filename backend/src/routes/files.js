@@ -238,9 +238,20 @@ function injectScrollSyncScript(html) {
     'info.docY=(dy+sy)/docH;' +
     '}' +
     'info.path=buildPath(el);' +
+    'info.modalId=findModalOwner(el);' +
     'var parent=el.parentNode;' +
     'if(parent){info.parentTag=parent.tagName||"";info.parentText=(parent.innerText||parent.textContent||"").slice(0,300);}' +
     'return info;}' +
+    // Nearest dialog/modal ancestor id, so annotations on elements inside a
+    // popup are scoped to that modal and never re-anchor to a same-shaped
+    // element at a different level (or hidden twin) on the page.
+    'function findModalOwner(el){var p=el.parentNode;while(p&&p!==document.documentElement){' +
+    'var dlg=p.tagName==="DIALOG";' +
+    'try{var ro=p.getAttribute&&p.getAttribute("role");if(ro==="dialog"||ro==="alertdialog")dlg=true;}catch(_){}' +
+    'var cn=(p.className&&typeof p.className==="string")?""+p.className:"";' +
+    'if(!dlg&&/modal|popup|dialog|drawer|layer|toast|pop/i.test(cn))dlg=true;' +
+    'if(dlg&&p.id&&p.id.trim()){return p.id.trim();}' +
+    'p=p.parentNode;}return "";}' +
     'window.addEventListener("message",function(e){' +
     'var d=e.data;if(!d)return;' +
     'if(d.__protoProbe===1){' +
@@ -257,6 +268,12 @@ function injectScrollSyncScript(html) {
     'try{' +
     'var el=null;' +
     'if(d.elementId)el=document.getElementById(d.elementId);' +
+    // Prefer resolving inside the recorded modal (scoped lookup) before any
+    // global path/text search, so same-shaped elements at different levels do
+    // not collide. Falls back to the legacy global search for old annotations.
+    'if(!el&&d.modalId){var mm0=document.getElementById(d.modalId);if(mm0){' +
+    'if(d.path){try{el=mm0.querySelector(d.path);}catch(_){}}' +
+    'if(!el&&d.text){var mw=document.createTreeWalker(mm0,NodeFilter.SHOW_TEXT,null,false);var mn;while(mn=mw.nextNode()){if(mn.textContent.indexOf(d.text)!==-1){el=mn.parentElement;break;}}}}}' +
     'if(!el&&d.path){try{el=document.querySelector(d.path);}catch(_){}}' +
     'if(!el&&d.text){var walker=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT,null,false);var node;while(node=walker.nextNode()){if(node.textContent.indexOf(d.text)!==-1){el=node.parentElement;break;}}}' +
     'if(el){Object.assign(res,buildElementInfo(el,0,0));res.viewport={width:window.innerWidth,height:window.innerHeight};}' +
