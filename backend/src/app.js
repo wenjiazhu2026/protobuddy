@@ -145,6 +145,12 @@ export function createApp({ makersPrefix } = {}) {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
   });
 
+  // Deployment probe: identifies which backend snapshot this function runs,
+  // used to verify cloud-function refreshes propagate.
+  app.get('/api/pbver', (req, res) => {
+    res.json({ v: '2026-09-09-m1' });
+  });
+
   // API routes (wrapped so async rejections become 500s instead of hanging)
   app.use('/api/projects', wrapAsyncHandlers(ownerAuthRouter));    // /api/projects/:id/owner-auth/*
   app.use('/api/projects', wrapAsyncHandlers(projectsRouter));
