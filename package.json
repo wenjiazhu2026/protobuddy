@@ -5,7 +5,7 @@
   "type": "module",
   "description": "ProtoBuddy full-stack deployment package for EdgeOne Makers (Cloud Functions + static frontend)",
   "scripts": {
-    "build": "rm -rf dist && cp -r frontend/dist dist",
+    "build": "npm ci --no-audit --no-fund && npm --prefix frontend ci --no-audit --no-fund && npm --prefix frontend run build && rm -rf dist && cp -r frontend/dist dist",
     "build:local": "cd frontend && npm run build && cd .. && rm -rf dist && cp -r frontend/dist dist",
     "regenerate": "node scripts/regenerate.js"
   },
