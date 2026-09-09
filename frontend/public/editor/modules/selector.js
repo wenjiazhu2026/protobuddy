@@ -20,15 +20,56 @@ window.HVE_Selector = (function () {
   // 不可选择的元素标签
   const EXCLUDED_TAGS = new Set(['HTML', 'HEAD', 'SCRIPT', 'STYLE', 'LINK', 'META', 'BR']);
 
+  // ── 编辑模式点击守卫 ──────────────────────────────────────────────
+  // 编辑模式下，原型自身的点击行为一律不允许触发：点击只用于「选中元素」。
+  // 守卫注册在 onClick 之后（同节点的捕获监听按注册顺序执行），因此
+  // 选中/框选逻辑总是先跑；随后 stopPropagation + preventDefault 阻止事件
+  // 继续下沉到原型节点（链接跳转、按钮 onclick、表单提交全部失效）。
+  // 不拦截 mousedown/mouseup：框选、拖拽、缩放的起点依赖它们。
+  const GUARD_EVENTS = ['click', 'auxclick', 'dblclick', 'contextmenu', 'submit'];
+  let guardHooks = [];
+
+  function onInteractionGuard(e) {
+    if (!isActive) return;
+    const t = e.target;
+    // 编辑器自身 UI（工具栏/面板/弹出层/快捷添加）不拦截
+    if (isEditorElement(t)) return;
+    // 正在文本编辑：目标内部点击保留给光标/选区（contenteditable 属于编辑动作）
+    if (window.HVE_TextEdit && window.HVE_TextEdit.isEditing()) {
+      const editingEl = getSelected();
+      if (editingEl && (editingEl === t || editingEl.contains(t))) return;
+    }
+    e.preventDefault();
+    e.stopPropagation();
+  }
+
+  function addInteractionGuard() {
+    guardHooks = GUARD_EVENTS.map(function (evt) {
+      const hook = onInteractionGuard;
+      document.addEventListener(evt, hook, true);
+      return hook;
+    });
+  }
+
+  function removeInteractionGuard() {
+    guardHooks.forEach(function (hook, i) {
+      document.removeEventListener(GUARD_EVENTS[i], hook, true);
+    });
+    guardHooks = [];
+  }
+
   function activate() {
     isActive = true;
     document.addEventListener('mousemove', onMouseMove, true);
     document.addEventListener('click', onClick, true);
     document.addEventListener('mousedown', onMouseDown, true);
+    // 守卫必须排在 onClick 之后注册：先选中，再拦截
+    addInteractionGuard();
   }
 
   function deactivate() {
     isActive = false;
+    removeInteractionGuard();
     document.removeEventListener('mousemove', onMouseMove, true);
     document.removeEventListener('click', onClick, true);
     document.removeEventListener('mousedown', onMouseDown, true);
