@@ -65,6 +65,11 @@ function PreviewFrame({ projectId, version, annotateMode, onAnnotate, annotation
   const editAckRef = useRef(false);
 
   const [iframeKey, setIframeKey] = useState(0);
+  // Unique per component mount: React will recreate the <iframe> element (and
+  // therefore its browsing context) on every re-entry into the preview, so the
+  // browser cannot restore the previously visited sub-page. Mirrors EdgeOne
+  // Makers' default: the preview always opens at the entry document (index).
+  const [mountNonce] = useState(() => Math.random().toString(36).slice(2));
   const [scrollPos, setScrollPos] = useState({ x: 0, y: 0 });
   const [docSize, setDocSize] = useState({ width: 1, height: 1 });
   const [currentPage, setCurrentPage] = useState('index.html');
@@ -522,7 +527,7 @@ function PreviewFrame({ projectId, version, annotateMode, onAnnotate, annotation
     <div className="preview-iframe-wrapper" ref={containerRef} onClick={handleClick}>
       <iframe
         ref={iframeRef}
-        key={iframeKey}
+        key={mountNonce + ':' + iframeKey}
         src={previewUrl}
         className="preview-iframe"
         title="Prototype Preview"
