@@ -4,6 +4,20 @@ import { api, getOwnerToken, buildRegenerateCmd } from '../api.js';
 import { useOwnerAuth } from '../components/OwnerAuthContext.jsx';
 import { useToast } from '../components/ToastContext.jsx';
 
+function formatFileTime(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const diff = Date.now() - d.getTime();
+  const MIN = 60 * 1000, HOUR = 60 * MIN, DAY = 24 * HOUR;
+  if (diff < MIN) return '刚刚';
+  if (diff < HOUR) return Math.floor(diff / MIN) + ' 分钟前';
+  if (diff < DAY) return Math.floor(diff / HOUR) + ' 小时前';
+  if (diff < 30 * DAY) return Math.floor(diff / DAY) + ' 天前';
+  const p = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
 export default function Dashboard() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -373,7 +387,12 @@ export default function Dashboard() {
                 onClick={() => handleSelectFile(f)}
               >
                 <span>{fileIcon(f.path)}</span>
-                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.path}</span>
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{f.path}</span>
+                {f.updated_at && (
+                  <span className="file-tree-time" title={'更新时间：' + new Date(f.updated_at).toLocaleString()}>
+                    {formatFileTime(f.updated_at)}
+                  </span>
+                )}
               </div>
             ))
           )}
