@@ -148,7 +148,7 @@ export function createApp({ makersPrefix } = {}) {
   // Deployment probe: identifies which backend snapshot this function runs,
   // used to verify cloud-function refreshes propagate.
   app.get('/api/pbver', (req, res) => {
-    res.json({ v: '2026-09-09-m1' });
+    res.json({ v: '2026-09-09-m2' });
   });
 
   // API routes (wrapped so async rejections become 500s instead of hanging)
