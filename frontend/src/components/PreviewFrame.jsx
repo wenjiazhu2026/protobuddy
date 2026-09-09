@@ -50,7 +50,7 @@ function normalizePage(p) {
  * {__protoNav}. This component tracks the current page so annotation pins are
  * filtered per page and new annotations record which page they belong to.
  */
-function PreviewFrame({ projectId, version, annotateMode, onAnnotate, annotations, activeAnnotationId, onAnnotationClick, onPageChange, editMode = false, onEditorSave, onEditStateChange }, ref) {
+function PreviewFrame({ projectId, reloadNonce = 0, annotateMode, onAnnotate, annotations, activeAnnotationId, onAnnotationClick, onPageChange, editMode = false, onEditorSave, onEditStateChange }, ref) {
   const containerRef = useRef(null);
   const iframeRef = useRef(null);
   const probeRef = useRef({ nextId: 0, results: {} });
@@ -87,7 +87,13 @@ function PreviewFrame({ projectId, version, annotateMode, onAnnotate, annotation
   // the iframe from sending spoofed scroll/position data.
   const allowedOrigin = typeof window !== 'undefined' ? window.location.origin : '';
 
-  // Reload iframe when version changes, reset scroll offset and cached positions
+  // Rebuild the iframe when reloadNonce changes (explicit external re-sync).
+  // The stored content version is deliberately NOT a reload trigger: after a
+  // visual-edit save the live DOM *is* the content just written to the
+  // platform, so reloading would discard the editor's in-memory undo/redo
+  // history — undo (⌘Z)/redo (⌘⇧Z) must keep working after a save. Callers
+  // bump reloadNonce when a real re-fetch of the iframe document is desired
+  // (e.g. the explicit "↻ 刷新" action after external changes).
   useEffect(() => {
     setIframeKey(k => k + 1);
     setScrollPos({ x: 0, y: 0 });
@@ -96,7 +102,7 @@ function PreviewFrame({ projectId, version, annotateMode, onAnnotate, annotation
     setElementPositions({});
     setDraft(null);
     setDraftInput('');
-  }, [version]);
+  }, [reloadNonce]);
 
   // ----- Visual editor (可视化编辑) support -----
   // Keep a ref so the postMessage listener always sees the latest value without
@@ -123,8 +129,8 @@ function PreviewFrame({ projectId, version, annotateMode, onAnnotate, annotation
     }
   }, [allowedOrigin]);
 
-  // Turn the editor on when the toggle flips, and re-apply it after a reload
-  // (version change) or a sub-page navigation (each document gets a fresh
+  // Turn the editor on when the toggle flips, and re-apply it after a rebuild
+  // (reloadNonce change) or a sub-page navigation (each document gets a fresh
   // bootstrap, so the mode message must be re-sent).
   useEffect(() => {
     sendEditMode(0);
@@ -159,7 +165,7 @@ function PreviewFrame({ projectId, version, annotateMode, onAnnotate, annotation
     if (!editMode) return;
     const t = setTimeout(() => sendEditMode(0), 250);
     return () => clearTimeout(t);
-  }, [version, editMode, sendEditMode]);
+  }, [reloadNonce, editMode, sendEditMode]);
 
   // Reply to a save request from the editor: hand the serialized HTML to the
   // parent, wait for the owner-gated write, then report the result back.

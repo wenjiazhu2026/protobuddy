@@ -27,6 +27,12 @@ export default function Review() {
   const { showToast } = useToast();
   const { guard } = useOwnerAuth();
   const [taskCount, setTaskCount] = useState(null);
+  // Explicit re-sync of the preview iframe. The preview deliberately does NOT
+  // rebuild after a visual-edit save (the live DOM already is the stored
+  // content — rebuilding would wipe the editor's undo/redo history so that
+  // "撤销" can no longer work after a save). Only this counter, bumped by the
+  // manual "↻ 刷新" action, forces PreviewFrame to rebuild the iframe.
+  const [reloadNonce, setReloadNonce] = useState(0);
   const [panelOpen, setPanelOpen] = useState(() => {
     try { return localStorage.getItem('protobuddy.review.panel.open') !== 'false'; } catch { return true; }
   });
@@ -142,15 +148,19 @@ export default function Review() {
   /**
    * Visual-edit save: the iframe editor serializes a page back to HTML and
    * posts it here. Writing files is owner-gated (like upload/deploy), so the
-   * OwnerAuth guard opens the password dialog when needed. On success the
-   * project version bumps and the preview reloads with the edited content.
+   * OwnerAuth guard opens the password dialog when needed.
+   *
+   * On success the project version bumps for the badge, but the preview is NOT
+   * reloaded: the DOM the editor just serialized is exactly the content written
+   * to the platform, so a reload would throw away the editor's in-memory
+   * undo/redo history and "保存后也无法撤销". Instead the editor session stays
+   * alive — the user keeps editing and ⌘Z / ⌘⇧Z still undo redo across the
+   * save (including back to the previous saved state; a later save persists it).
    */
   const handleEditorSave = useCallback(async (page, html) => {
     try {
       await guard(id, () => api.writeFile(id, page, html, getOwnerToken(id)));
       setProject(p => ({ ...p, version: (p.version || 1) + 1 }));
-      setEditMode(false);
-      setEditorReady(false);
       showToast(`已保存到项目 · ${page.split('/').pop()}`, 'success');
       return { ok: true };
     } catch (err) {
@@ -293,6 +303,16 @@ export default function Review() {
                 </select>
               </label>
             )}
+            <button
+              className="btn btn-sm btn-secondary"
+              title="从平台存储重新加载预览。保存后编辑内容已是最新，无需刷新；仅在需要强制重新同步（如其他端改动过存储）时使用；编辑模式下刷新会丢弃未保存改动"
+              onClick={() => {
+                if (editMode && !window.confirm('刷新将重新加载预览，未保存的编辑会丢失，确定刷新？')) return;
+                setReloadNonce(n => n + 1);
+              }}
+            >
+              ↻ 刷新
+            </button>
             {project.deploy_method === 'edgeone' || project.deploy_method === 'edgeone_manual' ? (
               project.current_url && project.current_url.startsWith('http') ? (
                 <a
@@ -314,7 +334,7 @@ export default function Review() {
             )}
             {editMode && (
               <span className="badge badge-blue" style={{ animation: 'pulse 1.5s infinite', border: '1px solid var(--primary)' }}>
-                可视化编辑模式 · 点选/拖拽/双击，⌘S 或「保存到项目」写回平台
+                可视化编辑模式 · 点选/拖拽/双击，⌘S 或「保存到项目」写回平台，保存后仍可 ⌘Z 撤销
               </span>
             )}
             {annotateMode && (
@@ -327,7 +347,7 @@ export default function Review() {
             <PreviewFrame
               ref={previewRef}
               projectId={id}
-              version={project.version}
+              reloadNonce={reloadNonce}
               annotateMode={annotateMode}
               editMode={editMode}
               onEditorSave={handleEditorSave}
