@@ -110,7 +110,9 @@ export function createApp({ makersPrefix } = {}) {
 
   // Security headers via helmet. Configured to allow the app's own patterns:
   //   - frameSrc 'self': the preview iframe loads same-origin prototype HTML
-  //   - scriptSrc 'self' 'unsafe-inline': prototype HTML often has inline JS
+  //   - scriptSrc 'self' 'unsafe-inline' + https://unpkg.com: prototype pages
+  //     pull the Lucide icon library from unpkg; without the origin every icon
+  //     (and lucide-rendered QR codes) silently fails to render.
   //   - scriptSrcAttr 'unsafe-inline': prototype HTML heavily uses inline
   //     onclick/onchange handlers; helmet's default 'none' here silently kills
   //     every button/modal an inline handler drives (e.g. 弹窗点不开)
@@ -122,7 +124,7 @@ export function createApp({ makersPrefix } = {}) {
     contentSecurityPolicy: {
       directives: {
         defaultSrc: ["'self'"],
-        scriptSrc: ["'self'", "'unsafe-inline'"],
+        scriptSrc: ["'self'", "'unsafe-inline'", 'https://unpkg.com'],
         scriptSrcAttr: ["'unsafe-inline'"],
         styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
         imgSrc: ["'self'", 'data:', 'https:', 'http:'],
