@@ -111,6 +111,9 @@ export function createApp({ makersPrefix } = {}) {
   // Security headers via helmet. Configured to allow the app's own patterns:
   //   - frameSrc 'self': the preview iframe loads same-origin prototype HTML
   //   - scriptSrc 'self' 'unsafe-inline': prototype HTML often has inline JS
+  //   - scriptSrcAttr 'unsafe-inline': prototype HTML heavily uses inline
+  //     onclick/onchange handlers; helmet's default 'none' here silently kills
+  //     every button/modal an inline handler drives (e.g. 弹窗点不开)
   //   - styleSrc 'self' 'unsafe-inline' + Google Fonts: prototypes commonly link
   //     fonts.googleapis.com stylesheets; allow them so fonts (and any modal
   //     CSS they carry) actually load instead of being silently blocked.
@@ -120,6 +123,7 @@ export function createApp({ makersPrefix } = {}) {
       directives: {
         defaultSrc: ["'self'"],
         scriptSrc: ["'self'", "'unsafe-inline'"],
+        scriptSrcAttr: ["'unsafe-inline'"],
         styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
         imgSrc: ["'self'", 'data:', 'https:', 'http:'],
         fontSrc: ["'self'", 'data:', 'https://fonts.gstatic.com'],
