@@ -474,15 +474,6 @@ export default function Dashboard() {
                     {formatFileTime(f.updated_at)}
                   </span>
                 )}
-                <a
-                  className="file-tree-dl"
-                  href={api.fileDownloadUrl(id, f.path)}
-                  download
-                  title={`下载 ${f.path.split('/').pop()}`}
-                  onClick={e => e.stopPropagation()}
-                >
-                  ⭳
-                </a>
               </div>
             ))
           )}
@@ -493,18 +484,26 @@ export default function Dashboard() {
             <div className="card" style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
               <div className="card-header">
                 <span className="card-title">{selectedFile.path}</span>
-                {isTextFile(selectedFile.path) && (
-                  <div style={{ display: 'flex', gap: 8 }}>
-                    {editing ? (
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  {isTextFile(selectedFile.path) && (
+                    editing ? (
                       <>
                         <button className="btn btn-sm btn-secondary" onClick={() => setEditing(false)}>取消</button>
                         <button className="btn btn-sm btn-primary" onClick={handleSaveFile}>保存</button>
                       </>
                     ) : (
                       <button className="btn btn-sm btn-secondary" onClick={() => setEditing(true)}>编辑</button>
-                    )}
-                  </div>
-                )}
+                    )
+                  )}
+                  <a
+                    className="btn btn-sm btn-secondary"
+                    href={api.fileDownloadUrl(id, selectedFile.path)}
+                    download
+                    title={`下载 ${selectedFile.path.split('/').pop()}`}
+                  >
+                    ⭳ 下载
+                  </a>
+                </div>
               </div>
               <div style={{ flex: 1, overflow: 'auto', padding: 16 }}>
                 {isTextFile(selectedFile.path) ? (
