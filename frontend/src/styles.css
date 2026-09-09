@@ -618,6 +618,20 @@ button {
   white-space: nowrap;
 }
 
+/* Manual page switcher dropdown in the preview toolbar */
+.page-switcher {
+  max-width: 220px;
+  font-size: 13px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-card);
+  color: var(--text);
+  cursor: pointer;
+  outline: none;
+}
+.page-switcher:focus { border-color: var(--primary); }
+
 /* Data-source hint row shown above the preview iframe when the project has a
    separate EdgeOne deployment (e.g. deployed from local CLI or another host). */
 .preview-sync-hint {

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { api, getOwnerToken } from '../api.js';
 import PreviewFrame from '../components/PreviewFrame.jsx';
@@ -22,6 +22,8 @@ export default function Review() {
   const [generating, setGenerating] = useState(false);
   const [latestPlan, setLatestPlan] = useState(null);
   const [currentPage, setCurrentPage] = useState('index.html');
+  // Stored prototype files; used to build the manual page switcher.
+  const [pages, setPages] = useState([]);
   const { showToast } = useToast();
   const { guard } = useOwnerAuth();
   const [taskCount, setTaskCount] = useState(null);
@@ -42,12 +44,14 @@ export default function Review() {
 
   const load = useCallback(async () => {
     try {
-      const [p, anns] = await Promise.all([
+      const [p, anns, f] = await Promise.all([
         api.getProject(id),
-        api.listAnnotations(id)
+        api.listAnnotations(id),
+        api.listFiles(id).catch(() => [])
       ]);
       setProject(p);
       setAnnotations(anns);
+      setPages(f);
     } catch (err) {
       showToast('加载失败: ' + err.message, 'error');
     } finally {
@@ -56,6 +60,19 @@ export default function Review() {
   }, [id]);
 
   useEffect(() => { load(); }, [load]);
+
+  // 页面切换下拉数据源：项目内全部 HTML 页面，index.html 置顶，其余按路径排序。
+  const htmlPages = useMemo(() => {
+    return pages
+      .filter(f => /\.html?$/i.test(f.path || ''))
+      .map(f => ({ path: f.path.replace(/^\.\//, ''), label: (f.path || '').replace(/^\.\//, '') }))
+      .sort((a, b) => {
+        const ai = a.path === 'index.html' ? 0 : 1;
+        const bi = b.path === 'index.html' ? 0 : 1;
+        if (ai !== bi) return ai - bi;
+        return a.label.localeCompare(b.label, 'zh-CN');
+      });
+  }, [pages]);
 
   // Task count badge for the tasks entry (never blocks the review page)
   useEffect(() => {
@@ -252,6 +269,27 @@ export default function Review() {
             <span className="badge badge-blue" title="评审预览固定从平台存储读取（编辑、保存也写平台存储），与 EdgeOne 线上版本无关；线上版本仅在点击重新部署后更新">
               平台存储 v{project.version || 1}
             </span>
+            {htmlPages.length > 1 && (
+              <select
+                className="page-switcher"
+                value={htmlPages.some(p => p.path === currentPage) ? currentPage : '__other__'}
+                title="手动切换页面"
+                aria-label="切换页面"
+                onChange={(e) => {
+                  const page = e.target.value;
+                  if (page && page !== '__other__' && page !== currentPage) {
+                    previewRef.current?.navigateTo(page);
+                  }
+                }}
+              >
+                {!htmlPages.some(p => p.path === currentPage) && (
+                  <option value="__other__">{currentPage.split('/').pop()}</option>
+                )}
+                {htmlPages.map(({ path, label }) => (
+                  <option key={path} value={path}>{label}</option>
+                ))}
+              </select>
+            )}
             {project.deploy_method === 'edgeone' || project.deploy_method === 'edgeone_manual' ? (
               project.current_url && project.current_url.startsWith('http') ? (
                 <a
