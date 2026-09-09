@@ -479,7 +479,7 @@ function PreviewFrame({ projectId, version, annotateMode, onAnnotate, annotation
         src={previewUrl}
         className="preview-iframe"
         title="Prototype Preview"
-        sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+        sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
       />
       {/* Transparent overlay - sits on top of iframe, same size.
           In visual-edit mode the pointer must reach the iframe (the editor

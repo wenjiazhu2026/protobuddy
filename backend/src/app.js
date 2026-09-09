@@ -111,18 +111,18 @@ export function createApp({ makersPrefix } = {}) {
   // Security headers via helmet. Configured to allow the app's own patterns:
   //   - frameSrc 'self': the preview iframe loads same-origin prototype HTML
   //   - scriptSrc 'self' 'unsafe-inline': prototype HTML often has inline JS
-  //   - styleSrc 'self' 'unsafe-inline': React inline styles + prototype CSS
+  //   - styleSrc 'self' 'unsafe-inline' + Google Fonts: prototypes commonly link
+  //     fonts.googleapis.com stylesheets; allow them so fonts (and any modal
+  //     CSS they carry) actually load instead of being silently blocked.
   //   - imgSrc *: prototype assets may load from any origin
-  // X-Frame-Options SAMEORIGIN prevents external sites from embedding the app
-  // (clickjacking), while still allowing the app's own preview iframe.
   app.use(helmet({
     contentSecurityPolicy: {
       directives: {
         defaultSrc: ["'self'"],
         scriptSrc: ["'self'", "'unsafe-inline'"],
-        styleSrc: ["'self'", "'unsafe-inline'"],
+        styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
         imgSrc: ["'self'", 'data:', 'https:', 'http:'],
-        fontSrc: ["'self'", 'data:'],
+        fontSrc: ["'self'", 'data:', 'https://fonts.gstatic.com'],
         frameSrc: ["'self'"],
         connectSrc: ["'self'"],
         objectSrc: ["'none'"],
