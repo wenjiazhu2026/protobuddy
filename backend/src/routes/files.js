@@ -352,8 +352,14 @@ function injectEditorBootstrap(html) {
     if (active) return report();
     if (window.HVE_Core) { window.HVE_Core.enable(); active = true; return report(); }
     loadModules().then(function(ok){
-      if (ok && window.HVE_Core) { window.HVE_Core.enable(); active = true; }
-      report();
+      // Once the user asked for edit mode we MUST end up active: the ack drives
+      // the parent's toggle. Keep polling until the core actually landed (fast
+      // with parallel load + cache) instead of reporting an impatient "false".
+      (function tryEnable(){
+        if (ok && window.HVE_Core) { window.HVE_Core.enable(); active = true; }
+        if (active) return report();
+        setTimeout(tryEnable, 150);
+      })();
     });
   }
   function disable(){ if (active && window.HVE_Core) window.HVE_Core.disable(); active = false; report(); }

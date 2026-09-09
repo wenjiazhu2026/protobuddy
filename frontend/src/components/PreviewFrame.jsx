@@ -264,8 +264,13 @@ function PreviewFrame({ projectId, version, annotateMode, onAnnotate, annotation
       // store latest bounding rect for this annotation's anchor element
       setElementPositions(prev => ({ ...prev, [d.id]: d.found ? d : null }));
     } else if (d.__pbEditReady) {
-      // Visual editor became active/ready inside the iframe -> inform parent
+      // Visual editor became active/ready inside the iframe -> inform parent.
+      // Important: while the user has asked edit mode ON (editModeRef true) we
+      // only ever move TO active — a premature "false" ack (e.g. the parallel
+      // module load still finishing) must not flip the mode off and force a
+      // needless second click. Exit is signalled by the explicit __pbEditExit.
       editAckRef.current = !!d.active;
+      if (!d.active && editModeRef.current) return;
       onEditStateChange?.(!!d.active);
     } else if (d.__pbEditExit) {
       // User pressed the in-page "退出" button; parent should resync its toggle
