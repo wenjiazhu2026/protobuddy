@@ -308,6 +308,9 @@ function injectEditorBootstrap(html) {
   window.__pbEditorInit = 1;
   var editorBases = ["/editor/", "/api/editor/"], BASE = null;
   var MODULES = ["html-serializer.js","proto-file-manager.js","history.js","selector.js","drag-move.js","resize.js","text-edit.js","table-edit.js","image-handler.js","align-guide.js","toolbar.js","insert-panel.js","context-menu.js","editor-core.js"];
+  // Bump whenever /editor/* assets change so deployed pages retire the browser
+  // cache instead of running a stale (e.g. pre click-guard) module build.
+  var ASSET_VER = "2026-06-onclip-e1";
   var active = false, loading = false;
   function report(){ try { window.parent.postMessage({ __pbEditReady:1, active:active }, "*"); } catch(e){} }
   function resolveBase(cb){
@@ -332,14 +335,14 @@ function injectEditorBootstrap(html) {
       resolveBase(function(ok){
         if (!ok) { loading = false; return res(false); }
         var css = document.createElement("link");
-        css.rel = "stylesheet"; css.href = BASE + "editor.css";
+        css.rel = "stylesheet"; css.href = BASE + "editor.css?v=" + ASSET_VER;
         css.setAttribute("data-hve-editor", "true");
         (document.head || document.documentElement).appendChild(css);
         var total = MODULES.length, done = 0, target = document.body || document.documentElement;
         for (var i = 0; i < total; i++) {
           (function(name){
             var s = document.createElement("script");
-            s.src = BASE + "modules/" + name;
+            s.src = BASE + "modules/" + name + "?v=" + ASSET_VER;
             s.setAttribute("data-hve-editor", "true");
             s.onload = s.onerror = function(){ done++; if (done >= total) { loading = false; res(true); } };
             target.appendChild(s);
