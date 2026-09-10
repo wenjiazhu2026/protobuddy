@@ -99,6 +99,7 @@ router.post('/:id/deploy', requireOwnerAuth, async (req, res) => {
       deployment_id: deployment.id,
       error: result.error,
       log_file: result.logFile,
+      deploy_stats: result.deployStats || null,
       custom_domain_bound: result.customDomainBound,
       custom_domain_status: result.customDomainStatus,
       generator: gen.generator ? {

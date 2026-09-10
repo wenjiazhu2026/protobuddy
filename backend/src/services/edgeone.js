@@ -44,29 +44,141 @@ function saveDeployLog(projectId, output) {
   return logFile;
 }
 
+// ZIP extraction artefacts / tool metadata that must never reach the deployment.
+const JUNK_SEGMENTS = ['__MACOSX', '.edgeone', '.git', '.svn', 'node_modules'];
+function isJunkPath(rel) {
+  const segments = rel.split('/');
+  const base = segments[segments.length - 1] || '';
+  return (
+    base === '.DS_Store' ||
+    base === 'Thumbs.db' ||
+    base.startsWith('._') ||
+    segments.some(s => JUNK_SEGMENTS.includes(s))
+  );
+}
+
 /**
- * Collect deployable files from the storage driver (blob mode).
- * Deploys only the entry-point subtree (e.g. ZIPs wrapped in `原型设计/`),
- * stripping the wrapper dir so index.html lands at the deployment root.
+ * Build the deploy manifest for a project: EVERY file the file list shows,
+ * mapped to the path it must have inside the deployment.
+ *
+ * The entry-point directory (ZIPs are often wrapped in e.g. `原型设计/`) is
+ * flattened to the deployment root so index.html resolves at `/`. Files
+ * OUTSIDE that directory used to be dropped entirely — they are now uploaded
+ * with their original relative path.
+ *
+ * @returns {Promise<{entry:string, files:Array<{rel:string, deployPath:string}>, skipped:Array<{rel:string, reason:string}>}>}
  */
-async function collectCloudFiles(projectId) {
+export async function planDeployPaths(projectId) {
   const entry = (await findEntryPoint(projectId)) || '';
   const prefix = entry ? `${entry}/` : '';
-  const paths = await listProjectFiles(projectId);
+  const paths = (await listProjectFiles(projectId)) || [];
+
+  // Entry subtree first: it owns the deployment root, so it wins path conflicts.
+  const ordered = entry
+    ? [...paths.filter(p => p.startsWith(prefix)), ...paths.filter(p => !p.startsWith(prefix))]
+    : paths;
+
   const files = [];
-  for (const p of paths) {
-    if (!prefix || p.startsWith(prefix)) {
-      const rel = prefix ? p.slice(prefix.length) : p;
-      if (!rel || rel.endsWith('/')) continue;
-      const content = await readFileContent(projectId, p);
-      if (!content) continue;
-      const body = content.binary
-        ? new Uint8Array(Buffer.from(content.data, 'base64'))
-        : new TextEncoder().encode(content.data);
-      files.push({ path: rel, body });
-    }
+  const skipped = [];
+  const seen = new Set();
+  for (const rel of ordered) {
+    if (!rel || rel.endsWith('/')) continue;
+    if (isJunkPath(rel)) { skipped.push({ rel, reason: 'junk' }); continue; }
+    const deployPath = prefix && rel.startsWith(prefix) ? rel.slice(prefix.length) : rel;
+    if (!deployPath) { skipped.push({ rel, reason: 'empty' }); continue; }
+    if (seen.has(deployPath)) { skipped.push({ rel, reason: 'conflict' }); continue; }
+    seen.add(deployPath);
+    files.push({ rel, deployPath });
   }
-  return files;
+  return { entry, files, skipped };
+}
+
+const READ_CONCURRENCY = 6;
+const READ_BUDGET_MS = 60000; // Cloud Functions cap at 120s — leave room for the COS upload + deployment API
+const MAX_TOTAL_BYTES = 150 * 1024 * 1024;
+
+/**
+ * Collect deployable files from the storage driver (blob mode) — all of them.
+ * Reads are concurrent: a serial read of every project file can blow the 120s
+ * function budget on larger prototypes.
+ *
+ * @returns {Promise<{files:Array<{path:string, body:Uint8Array}>, entry:string, total:number, skipped:Array}>}
+ */
+async function collectCloudFiles(projectId, { budgetMs = READ_BUDGET_MS } = {}) {
+  const plan = await planDeployPaths(projectId);
+  const items = plan.files;
+  const deadline = Date.now() + budgetMs;
+  const contents = new Array(items.length);
+  let cursor = 0;
+  let timedOut = false;
+
+  const worker = async () => {
+    for (;;) {
+      if (Date.now() > deadline) { timedOut = true; return; }
+      const i = cursor++;
+      if (i >= items.length) return;
+      contents[i] = await readFileContent(projectId, items[i].rel);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(READ_CONCURRENCY, items.length) }, worker));
+
+  if (timedOut && contents.some(c => c === undefined)) {
+    const done = contents.filter(Boolean).length;
+    throw new Error(
+      `读取项目文件超时（云函数 120s 上限）：仅完成 ${done}/${items.length} 个。已中止部署，避免上传不完整的站点。`
+    );
+  }
+
+  const files = [];
+  const unreadable = [];
+  let totalBytes = 0;
+  for (let i = 0; i < items.length; i++) {
+    const content = contents[i];
+    if (!content) { unreadable.push({ rel: items[i].rel, reason: 'unreadable' }); continue; }
+    const body = content.binary
+      ? new Uint8Array(Buffer.from(content.data, 'base64'))
+      : new TextEncoder().encode(content.data);
+    totalBytes += body.byteLength;
+    if (totalBytes > MAX_TOTAL_BYTES) {
+      throw new Error(`项目文件总大小超过 ${Math.round(MAX_TOTAL_BYTES / 1024 / 1024)}MB 上限，已中止部署。`);
+    }
+    files.push({ path: items[i].deployPath, body });
+  }
+  return {
+    files,
+    entry: plan.entry,
+    total: items.length,
+    totalBytes,
+    skipped: plan.skipped.concat(unreadable)
+  };
+}
+
+/**
+ * Materialise the deploy manifest into a staging directory so the CLI uploads
+ * every project file from one root (the CLI deploys `cwd`, so running it
+ * inside the entry subtree would silently ship only that subtree).
+ *
+ * Lives OUTSIDE the project dir — otherwise listProjectFiles() would pick the
+ * staged copies up as project files on the next deploy.
+ */
+export async function stageDeployDir(projectId, projectDir, plan) {
+  const stageDir = path.join(projectDir, '..', '..', '.pb-stage', String(projectId));
+  fs.rmSync(stageDir, { recursive: true, force: true });
+  fs.mkdirSync(stageDir, { recursive: true });
+
+  const missing = [];
+  for (const item of plan.files) {
+    const content = await readFileContent(projectId, item.rel);
+    if (!content) { missing.push(item.rel); continue; }
+    const target = path.join(stageDir, item.deployPath);
+    if (target !== stageDir && !target.startsWith(stageDir + path.sep)) continue;
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(
+      target,
+      content.binary ? Buffer.from(content.data, 'base64') : Buffer.from(content.data, 'utf-8')
+    );
+  }
+  return { stageDir, missing };
 }
 
 /**
@@ -95,17 +207,26 @@ export async function deployToEdgeOne(project) {
       console.log(`[edgeone] Deploying project ${project.id} to EdgeOne Makers via Pages API...`);
       // Validate the name (user-controlled) before it reaches the API payload.
       const projectName = safeProjectName(project.edgeone_project_name, `proto-${project.slug || project.id}`);
-      const files = await collectCloudFiles(project.id);
+      const collected = await collectCloudFiles(project.id);
+      const files = collected.files;
+      const deployStats = {
+        entry: collected.entry || '',
+        uploaded: files.length,
+        total: collected.total,
+        bytes: collected.totalBytes,
+        skipped: collected.skipped
+      };
       if (files.length === 0) {
-        return { success: false, url: '', method: 'none', error: 'Project has no files. Upload prototype files first.' };
+        return { success: false, url: '', method: 'none', error: 'Project has no files. Upload prototype files first.', deployStats };
       }
+      console.log(`[edgeone] Deploy manifest: ${files.length}/${collected.total} files, ${(collected.totalBytes / 1024).toFixed(1)}KB, entry='${collected.entry || '/'}'${collected.skipped.length ? `, skipped: ${collected.skipped.map(s => `${s.rel}(${s.reason})`).join(', ')}` : ''}`);
 
       const { projectId, deploymentId } = await uploadAndDeploy({ token: project.edgeone_token, projectName, files });
       const polled = await pollDeployment({ token: project.edgeone_token, projectId, deploymentId, budgetMs: CLOUD_POLL_BUDGET_MS });
 
       if (!polled.done) {
         // Function may hit its time limit; the frontend continues polling deploy-status.
-        return { success: true, url: '', method: 'edgeone_deploying', projectId, deploymentId, log: `Deployment ${deploymentId} is building on EdgeOne.` };
+        return { success: true, url: '', method: 'edgeone_deploying', projectId, deploymentId, deployStats, log: `Deployment ${deploymentId} is building on EdgeOne (${files.length} files).` };
       }
       if (polled.status !== 'Success') {
         throw new Error(`EdgeOne deployment ended with status: ${polled.status}`);
@@ -117,8 +238,8 @@ export async function deployToEdgeOne(project) {
       const url = urlResult.url;
       console.log(`[edgeone] Deploy success: ${url}`);
       return {
-        success: true, url, method: 'edgeone', projectId, deploymentId,
-        log: `Deployed ${files.length} files. ${url}`,
+        success: true, url, method: 'edgeone', projectId, deploymentId, deployStats,
+        log: `Deployed ${files.length} files (entry='${collected.entry || '/'}'). ${url}`,
         customDomainBound: urlResult.customDomainBound,
         customDomainStatus: urlResult.customDomainStatus
       };
@@ -140,11 +261,10 @@ export async function deployToEdgeOne(project) {
   // `The "path" argument must be of type string` on every local redeploy
   // (blob mode took the Pages-API branch above, so the bug only bit local dev).
   const projectDir = await getProjectDir(project.id);
-  const entrySubdir = await findEntryPoint(project.id);
-  const deployDir = entrySubdir ? path.join(projectDir, entrySubdir) : projectDir;
+  const plan = await planDeployPaths(project.id);
 
-  // Verify directory has content
-  if (!fs.existsSync(deployDir) || fs.readdirSync(deployDir).length === 0) {
+  // Verify the manifest has content (ALL project files, not just the entry subtree)
+  if (plan.files.length === 0) {
     return {
       success: false,
       url: '',
@@ -152,6 +272,18 @@ export async function deployToEdgeOne(project) {
       error: 'Project directory is empty. Upload prototype files first.'
     };
   }
+
+  // Stage every project file under one root: the entry subtree flattened to the
+  // root (so index.html resolves at `/`), everything else at its own path.
+  const { stageDir, missing: stageMissing } = await stageDeployDir(project.id, projectDir, plan);
+  const deployDir = stageDir;
+  const deployStats = {
+    entry: plan.entry || '',
+    uploaded: plan.files.length - stageMissing.length,
+    total: plan.files.length,
+    skipped: plan.skipped.concat(stageMissing.map(rel => ({ rel, reason: 'unreadable' })))
+  };
+  console.log(`[edgeone] Staged ${plan.files.length} files at ${stageDir} (entry='${plan.entry || '/'}')${stageMissing.length ? `, unreadable: ${stageMissing.join(', ')}` : ''}`);
 
   // Default path: EdgeOne Makers hosting (requires API token)
   if (project.edgeone_token) {
@@ -185,6 +317,7 @@ export async function deployToEdgeOne(project) {
           success: true,
           url,
           method: 'edgeone',
+          deployStats,
           log: output,
           logFile
         };
@@ -199,6 +332,7 @@ export async function deployToEdgeOne(project) {
         success: false,
         url: '',
         method: 'edgeone_failed',
+        deployStats,
         error: err.message,
         log: err.stdout || err.stderr || err.message,
         logFile: err.logFile || saveDeployLog(project.id, err.stdout || err.stderr || err.message)
@@ -213,6 +347,7 @@ export async function deployToEdgeOne(project) {
     success: true,
     url: '', // Will be constructed by the caller using /api/projects/:id/preview
     method: 'local',
+    deployStats,
     log: 'Deployed via local static hosting (EdgeOne CLI unavailable or not configured).'
   };
 }
