@@ -866,6 +866,18 @@ button {
   padding: 16px;
 }
 
+/* 评审页顶部操作栏：页面垂直滚动时保持固顶，紧贴 topbar + project-nav 之下。
+   不透明背景避免滚动内容从按钮底下透出；上下 padding 由 review-main 的
+   paddingTop 16→8 与 margin-bottom 16→8 补偿，初始布局不变。 */
+.review-main .page-header {
+  position: sticky;
+  top: calc(var(--topbar-h) + var(--projectnav-h));
+  z-index: 96;
+  background: var(--bg);
+  padding: 8px 0;
+  margin-bottom: var(--space-2);
+}
+
 .annotation-item {
   padding: 12px 16px;
   border-bottom: 1px solid var(--border);

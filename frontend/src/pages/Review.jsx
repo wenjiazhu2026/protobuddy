@@ -216,7 +216,7 @@ export default function Review() {
   const hasPreview = project.current_url || project.status === 'uploaded' || project.status === 'deployed';
 
   return (
-    <div className="main-content review-main" style={{ paddingTop: 16, display: 'flex', flexDirection: 'column', height: '100%' }}>
+    <div className="main-content review-main" style={{ paddingTop: 8, display: 'flex', flexDirection: 'column', height: '100%' }}>
       {/* Header */}
       <div className="page-header" style={{ flexShrink: 0 }}>
         <div>
