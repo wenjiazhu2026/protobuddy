@@ -110,18 +110,19 @@ window.HVE_Toolbar = (function () {
       </div>
       <div class="hve-tb-sep"></div>
       <div class="hve-tb-group">
-        <button data-action="page-sorter" title="页面排序 (⌘⇧P)">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="8" height="5" rx="1"/><rect x="2" y="10" width="8" height="5" rx="1"/><rect x="2" y="17" width="8" height="5" rx="1"/><path d="M14 5h7M14 12h7M14 19h7"/></svg>
+        <button data-action="zoom-out" title="缩小 (⌘- / Ctrl+滚轮)">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="5" y1="12" x2="19" y2="12"/></svg>
         </button>
-        <button data-action="canvas-mode" title="画板模式 — Figma 风格自由画布">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="20" rx="3"/><circle cx="8" cy="8" r="2" fill="currentColor"/><path d="M3 16l5-5 4 4 3-3 6 6"/></svg>
+        <button data-action="zoom-pct" class="hve-tb-zoom-label" title="适应窗口 (⌘0) / 点击切换 100%">
+          <span class="hve-zoom-label-text">100%</span>
         </button>
-        <button data-action="pdf-paginator" title="PDF 分页预测与导出">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14,2 14,8 20,8"/><line x1="6" y1="13" x2="18" y2="13" stroke-dasharray="3 2"/><line x1="6" y1="17" x2="18" y2="17" stroke-dasharray="3 2"/></svg>
+        <button data-action="zoom-in" title="放大 (⌘+ / Ctrl+滚轮)">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
         </button>
-        <button data-action="chart-typo" title="图表排版工具">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M17.5 14v7M14.5 17.5h6"/></svg>
+        <button data-action="zoom-fit" title="适应窗口 (⌘0)">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 00-2 2v3M16 3h3a2 2 0 012 2v3M8 21H5a2 2 0 01-2-2v-3M16 21h3a2 2 0 002-2v-3"/><path d="M9 10h6v4H9z" fill="currentColor" opacity="0.35"/></svg>
         </button>
+        <span class="hve-tb-sep-vert"></span>
         <button data-action="undo" title="撤销 (⌘Z)">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="1,4 1,10 7,10"/><path d="M3.51 15a9 9 0 105.64-11.36L1 10"/></svg>
         </button>
@@ -148,6 +149,8 @@ window.HVE_Toolbar = (function () {
     });
     toolbarEl.addEventListener('click', onToolbarClick);
     document.body.appendChild(toolbarEl);
+    // 工具栏创建时同步一次缩放百分比（可能在已有缩放时首次显示）
+    updateZoomLabel();
   }
 
   function closeDropdown() {
@@ -416,71 +419,24 @@ window.HVE_Toolbar = (function () {
         })));
         break;
 
-      case 'page-sorter':
-        if (window.HVE_PageSorter) window.HVE_PageSorter.toggleSorter();
+      // ── 画布缩放（参考 prototype-html-editor：Ctrl+滚轮 / ⌘0 适应）──
+      case 'zoom-out':
+        if (window.HVE_Zoom) window.HVE_Zoom.zoomOut();
         break;
 
-      case 'canvas-mode':
-        if (window.HVE_Canvas) {
-          // 互斥：开启画板前关闭其他面板
-          if (!window.HVE_Canvas.isCanvasMode()) {
-            if (window.HVE_PDFPaginator?.isActive()) {
-              window.HVE_PDFPaginator.deactivate();
-              const pb = toolbarEl?.querySelector('[data-action="pdf-paginator"]');
-              if (pb) pb.classList.remove('hve-tb-pdf-active');
-            }
-            if (window.HVE_ChartTypo?.isActive()) {
-              window.HVE_ChartTypo.deactivate();
-              const cb = toolbarEl?.querySelector('[data-action="chart-typo"]');
-              if (cb) cb.classList.remove('hve-tb-chart-active');
-            }
-          }
-          window.HVE_Canvas.toggle();
-          // 更新按钮激活态
-          const cvsBtn = toolbarEl?.querySelector('[data-action="canvas-mode"]');
-          if (cvsBtn) cvsBtn.classList.toggle('hve-tb-canvas-active', window.HVE_Canvas.isCanvasMode());
-        }
+      case 'zoom-in':
+        if (window.HVE_Zoom) window.HVE_Zoom.zoomIn();
         break;
 
-      case 'pdf-paginator':
-        if (window.HVE_PDFPaginator) {
-          // 互斥：开启 PDF 面板前关闭其他面板
-          if (!window.HVE_PDFPaginator.isActive()) {
-            if (window.HVE_Canvas?.isCanvasMode()) {
-              window.HVE_Canvas.deactivate();
-              const cvb = toolbarEl?.querySelector('[data-action="canvas-mode"]');
-              if (cvb) cvb.classList.remove('hve-tb-canvas-active');
-            }
-            if (window.HVE_ChartTypo?.isActive()) {
-              window.HVE_ChartTypo.deactivate();
-              const cb = toolbarEl?.querySelector('[data-action="chart-typo"]');
-              if (cb) cb.classList.remove('hve-tb-chart-active');
-            }
-          }
-          window.HVE_PDFPaginator.toggle();
-          const pdfBtn = toolbarEl?.querySelector('[data-action="pdf-paginator"]');
-          if (pdfBtn) pdfBtn.classList.toggle('hve-tb-pdf-active', window.HVE_PDFPaginator.isActive());
-        }
+      case 'zoom-fit':
+        if (window.HVE_Zoom) window.HVE_Zoom.fit();
         break;
 
-      case 'chart-typo':
-        if (window.HVE_ChartTypo) {
-          // 互斥：开启图表面板前关闭其他面板
-          if (!window.HVE_ChartTypo.isActive()) {
-            if (window.HVE_Canvas?.isCanvasMode()) {
-              window.HVE_Canvas.deactivate();
-              const cvb = toolbarEl?.querySelector('[data-action="canvas-mode"]');
-              if (cvb) cvb.classList.remove('hve-tb-canvas-active');
-            }
-            if (window.HVE_PDFPaginator?.isActive()) {
-              window.HVE_PDFPaginator.deactivate();
-              const pb = toolbarEl?.querySelector('[data-action="pdf-paginator"]');
-              if (pb) pb.classList.remove('hve-tb-pdf-active');
-            }
-          }
-          window.HVE_ChartTypo.toggle();
-          const chartBtn = toolbarEl?.querySelector('[data-action="chart-typo"]');
-          if (chartBtn) chartBtn.classList.toggle('hve-tb-chart-active', window.HVE_ChartTypo.isActive());
+      case 'zoom-pct':
+        if (window.HVE_Zoom) {
+          // 点击百分比：非 100% 时回到 100%，已是 100% 时适配窗口
+          if (Math.abs(window.HVE_Zoom.getK() - 1) < 0.005) window.HVE_Zoom.fit();
+          else window.HVE_Zoom.reset();
         }
         break;
 
@@ -1147,5 +1103,15 @@ window.HVE_Toolbar = (function () {
     document.removeEventListener('keydown', onFormatBrushKeyDown, true);
   }
 
-  return { activate, deactivate, show, hide, getTarget, insertElement };
+  // 缩放状态 → 工具栏百分比标签（由 HVE_Zoom 在缩放变化时调用）
+  function updateZoomLabel() {
+    const label = toolbarEl?.querySelector('[data-action="zoom-pct"] .hve-zoom-label-text');
+    if (!label) return;
+    const k = window.HVE_Zoom ? window.HVE_Zoom.getK() : 1;
+    label.textContent = Math.round(k * 100) + '%';
+    const btn = toolbarEl?.querySelector('[data-action="zoom-pct"]');
+    if (btn) btn.classList.toggle('hve-tb-zoom-active', Math.abs(k - 1) > 0.005);
+  }
+
+  return { activate, deactivate, show, hide, getTarget, insertElement, updateZoomLabel };
 })();

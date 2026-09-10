@@ -208,7 +208,14 @@ router.delete('/:id/files/*', requireOwnerAuth, async (req, res) => {
  * Idempotent: skips if already injected (marker in the HTML).
  */
 function injectScrollSyncScript(html) {
-  if (!html || html.indexOf('__protoScrollInjected') !== -1) return html;
+  if (!html) return html;
+
+  // 旧版本注入过的原型（例如以往会话把已注入的页面原样保存）可能已带有一段
+  // 早期 proto-scroll-sync 脚本及其 __protoScrollInjected 标记。若不清理，
+  // 会触发下面的幂等短路，导致新增的悬停高亮/目标定位处理器永远无法上线。
+  // 因此先剥离旧的注入脚本（及其标记），再统一注入最新版本，保证注入恰好一次。
+  html = html.replace(/<script\b[^>]*>[\s\S]*?\/\*proto-scroll-sync\*\/[\s\S]*?<\/script>/gi, '');
+  html = html.split('__protoScrollInjected').join('');
 
   // data-hve-editor 标记让编辑器的序列化器（html-serializer.js）在保存时把这段
   // 运行时注入脚本一并剥离，避免把它（含 __protoScrollInjected 标记、window.open
@@ -244,7 +251,7 @@ function injectScrollSyncScript(html) {
     //    and answer position queries for already-anchored annotations.
     'function buildPath(el){var path=[];var p=el;while(p&&p!==document.body){var seg=p.tagName?p.tagName.toLowerCase():"";if(p.id&&p.id.trim)seg+="#"+p.id.trim();else{var c=(p.className&&typeof p.className==="string")?p.className.trim().split(/\\s+/).filter(function(x){return x}).slice(0,2):[];var nth=0;var sib=p;while(sib){if(sib.tagName===p.tagName)nth++;sib=sib.previousElementSibling;}if(c.length&&c[0])seg+="."+c.join(".");if(nth>1)seg+=":nth-of-type("+nth+")";}path.unshift(seg);p=p.parentNode;}return path.join(" > ");}' +
     'function buildElementInfo(el,dx,dy){' +
-    'var info={found:true,tagName:el.tagName,id:el.id||"",className:el.className||""};' +
+    'var info={found:true,tagName:el.tagName,elementId:el.id||"",className:el.className||""};' +
     'info.text=(el.innerText||el.textContent||"").slice(0,300);' +
     'info.isHeading=/^H[1-6]$/i.test(el.tagName);' +
     'try{info.fontSize=window.getComputedStyle(el).fontSize}catch(_){}' +
@@ -256,6 +263,9 @@ function injectScrollSyncScript(html) {
     'info.scrollX=sx;info.scrollY=sy;' +
     'info.docRect={left:r.left+sx,top:r.top+sy,width:r.width,height:r.height};' +
     'info.docSize={width:docW,height:docH};' +
+    // 质量提示：过小元素锚点不稳定；HTML/BODY 等通用容器属于页面级定位，不精确。
+    'info.undersized=(r.width<2||r.height<2);' +
+    'info.generic=/^(HTML|BODY|MAIN|SECTION|ARTICLE)$/i.test(el.tagName);' +
     'if(typeof dx==="number"&&typeof dy==="number"){' +
     'info.offsetX=r.width>0?((dx-r.left)/r.width):0.5;' +
     'info.offsetY=r.height>0?((dy-r.top)/r.height):0;' +
@@ -277,14 +287,33 @@ function injectScrollSyncScript(html) {
     'if(!dlg&&/modal|popup|dialog|drawer|layer|toast|pop/i.test(cn))dlg=true;' +
     'if(dlg&&p.id&&p.id.trim()){return p.id.trim();}' +
     'p=p.parentNode;}return "";}' +
+    // Extract an element id from a stored scope ("modal:x" / "drawer:x" /
+    // "dialog:x") so scoped annotations resolve inside that overlay even when
+    // the annotation was created before element-level modalId tracking existed.
+    'function scopeFindId(sco){var sx=String(sco||"");return sx.indexOf("modal:")===0?sx.slice(6):(sx.indexOf("drawer:")===0?sx.slice(7):(sx.indexOf("dialog:")===0?sx.slice(7):""));}' +
+    // --- 弹层作用域广播（对应 prototype-annotation 的“最高作用域”机制）---
+    // 观察 DOM 里可见的弹窗/抽屉（按 z-index 取最高者），把当前顶层作用域推给
+    // 父页面：弹窗开着时只显示 modal:{id} 批注，关闭后恢复页面级批注。
+    'function isElVisible(n){try{var st=getComputedStyle(n);if(n.getAttribute&&n.getAttribute("aria-hidden")==="true")return false;if(st.display==="none"||st.visibility==="hidden")return false;var rr=n.getBoundingClientRect();return rr.width>0&&rr.height>0;}catch(e){return false;}}' +
+    // 元素所在子树整体可见（沿祖先链检查 display/visibility/hidden），用于锚点
+    // 查询：目标元素处于关闭的弹窗/抽屉或隐藏区域时，视为“未找到”，父页面略过。
+    'function isDeepVisible(n){var nd=n;while(nd&&nd.nodeType===1&&nd!==document.body){var sv;try{sv=window.getComputedStyle(nd)}catch(eS){break}if(nd.hidden||(nd.getAttribute&&nd.getAttribute("aria-hidden")==="true"))return false;if(sv.display==="none"||sv.visibility==="hidden")return false;if(Number(sv.opacity)===0)return false;nd=nd.parentNode;}return true;}' +
+    'function computeOverlayScope(){var cands=document.querySelectorAll("[id][data-modal],[id][data-drawer],[id][data-dialog],[role=dialog][id],[role=alertdialog][id],.modal-overlay[id],.drawer-overlay[id]");var top=null;for(var i=0;i<cands.length;i++){var n=cands[i];if(!isElVisible(n))continue;var z=0;try{z=parseInt(getComputedStyle(n).zIndex,10)||0}catch(e){}var cn="";try{cn=n.className&&typeof n.className==="string"?n.className:""}catch(e2){}var kind=/drawer|side|draw/i.test(cn)?"drawer":"modal";if(!top||z>top.z)top={id:n.id,kind:kind,z:z};}return top?top.kind+":"+top.id:null;}' +
+    'var _ocv=null,_ocq=0;function emitOverlayScope(){var s=computeOverlayScope();if(s===_ocv)return;_ocv=s;try{window.parent.postMessage({__protoScopeState:1,scope:s},"*")}catch(e){}}' +
+    'function overlayDebounced(){if(_ocq)clearTimeout(_ocq);_ocq=setTimeout(function(){_ocq=0;emitOverlayScope()},350);}' +
     'window.addEventListener("message",function(e){' +
     'var d=e.data;if(!d)return;' +
+    'if(d.__protoScopeNow===1){var sn=null;try{sn=computeOverlayScope()}catch(e3){}window.parent.postMessage({__protoScopeState:1,scope:sn},"*");return;}' +
     'if(d.__protoProbe===1){' +
     'var info={__protoElement:1,id:d.id,found:false};' +
     'try{' +
     'var el=document.elementFromPoint(d.x,d.y);' +
     'if(!el)return window.parent.postMessage(info,"*");' +
     'Object.assign(info,buildElementInfo(el,d.x,d.y));' +
+    // 作用域：命中元素若在弹窗/抽屉内，则记录为 modal/drawer 作用域，否则为页面级。
+    // 供前端在创建批注、查询锚点、展示 pin 及写回 DB（annotations.scope）时使用。
+    'info.scope=(info.modalId?(/^(ASIDE|NAV|MENU)$/i.test(info.parentTag||"")?"drawer:":"modal:"):"page:")+(info.modalId||(d.page&&d.page.trim()?d.page:"index.html"));' +
+    'info.page=d.page||info.page||"index.html";' +
     '}catch(err){info.error=err.message;}' +
     'window.parent.postMessage(info,"*");' +
     'return;}' +
@@ -292,6 +321,7 @@ function injectScrollSyncScript(html) {
     'var res={__protoElementPos:1,id:d.id,found:false};' +
     'try{' +
     'var el=null;' +
+    'if(!d.modalId&&d.scope)d.modalId=scopeFindId(d.scope);' +
     'if(d.elementId)el=document.getElementById(d.elementId);' +
     // Prefer resolving inside the recorded modal (scoped lookup) before any
     // global path/text search, so same-shaped elements at different levels do
@@ -301,11 +331,42 @@ function injectScrollSyncScript(html) {
     'if(!el&&d.text){var mw=document.createTreeWalker(mm0,NodeFilter.SHOW_TEXT,null,false);var mn;while(mn=mw.nextNode()){if(mn.textContent.indexOf(d.text)!==-1){el=mn.parentElement;break;}}}}}' +
     'if(!el&&d.path){try{el=document.querySelector(d.path);}catch(_){}}' +
     'if(!el&&d.text){var walker=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT,null,false);var node;while(node=walker.nextNode()){if(node.textContent.indexOf(d.text)!==-1){el=node.parentElement;break;}}}' +
+    // 目标在关闭的弹窗/隐藏子树里时不算“找到”，父页面据此隐藏该锚点。
+    'if(el&&!isDeepVisible(el))el=null;' +
     'if(el){Object.assign(res,buildElementInfo(el,0,0));res.viewport={width:window.innerWidth,height:window.innerHeight};}' +
     '}catch(err){res.error=err.message;}' +
     'window.parent.postMessage(res,"*");' +
     'return;}' +
+    // 6. annotation targeting (参考 html-annotation-editor 的“选择目标区域”):
+    //    悬停时在原型内用虚线框标出当前命中的元素，让批注作者看清锚点会落在
+    //    哪个区域；点击后的 __protoProbe 探针命中的是同一元素。激活某条批注时
+    //    用 __protoReveal 滚动并闪烁高亮其目标元素。
+    'var _hl=null;function makeHl(){if(_hl)return _hl;' +
+    'var e=document.createElement("div");e.setAttribute("data-hve-editor","true");e.style.cssText="position:absolute;z-index:2147483645;pointer-events:none;box-sizing:border-box;border-radius:3px;";document.documentElement.appendChild(e);_hl=e;return e;}' +
+    'function showHl(r,opts){var e=makeHl();var o=opts||{};e.style.left=(r.left+(window.scrollX||0))+"px";e.style.top=(r.top+(window.scrollY||0))+"px";e.style.width=r.width+"px";e.style.height=r.height+"px";e.style.border=o.border||"2px dashed #f97316";e.style.background=o.background||"rgba(249,115,22,0.12)";e.style.display="block";return e;}' +
+    'function hideHl(){if(_hl){_hl.style.display="none";}}' +
+    'if(d.__protoHighlight===1){var he=null;try{he=document.elementFromPoint(d.x,d.y);}catch(e){}try{' +
+    'if(he&&he.tagName!=="HTML"){var hr=he.getBoundingClientRect();showHl(hr,{});var hi=buildElementInfo(he,d.x,d.y);window.parent.postMessage({__protoHoverInfo:1,found:true,tag:hi.tagName,id:hi.elementId,text:hi.text},"*");}else{hideHl();window.parent.postMessage({__protoHoverInfo:1,found:false},"*");}}catch(e2){hideHl();window.parent.postMessage({__protoHoverInfo:1,found:false},"*");}return;}' +
+    'if(d.__protoHoverClear===1){hideHl();return;}' +
+    'if(d.__protoReveal===1){var rel=null;try{' +
+    'if(!d.modalId&&d.scope)d.modalId=scopeFindId(d.scope);' +
+    'if(d.elementId)rel=document.getElementById(d.elementId);' +
+    'if(!rel&&d.modalId){var mm1=document.getElementById(d.modalId);if(mm1){' +
+    'if(d.path){try{rel=mm1.querySelector(d.path);}catch(_e){}}' +
+    'if(!rel&&d.text){var tw1=document.createTreeWalker(mm1,NodeFilter.SHOW_TEXT,null,false);var n1;while(n1=tw1.nextNode()){if(n1.textContent.indexOf(d.text)!==-1){rel=n1.parentElement;break;}}}}}' +
+    'if(!rel&&d.path){try{rel=document.querySelector(d.path);}catch(_e){}}' +
+    'if(!rel&&d.text){var wk1=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT,null,false);var n2;while(n2=wk1.nextNode()){if(n2.textContent.indexOf(d.text)!==-1){rel=n2.parentElement;break;}}}' +
+    '}catch(er){}' +
+    'if(rel&&(function(){try{return isDeepVisible(rel)}catch(_e){return true}})()){try{rel.scrollIntoView({block:"center",behavior:"smooth"});}catch(e3){try{rel.scrollIntoView(true);}catch(_e){}}' +
+    'setTimeout(function(){var rr0=rel.getBoundingClientRect();showHl(rr0,{border:"2px solid #dc2626",background:"rgba(220,38,38,0.10)"});setTimeout(hideHl,1600);},120);' +
+    'window.parent.postMessage({__protoRevealed:1,id:d.id,found:true},"*");}' +
+    'else{window.parent.postMessage({__protoRevealed:1,id:d.id,found:false},"*");}' +
+    'return;}' +
     '});' +
+    // 初始化：注册弹层变化观察者，文档加载后推一次当前作用域。
+    'var _mo=new MutationObserver(function(){overlayDebounced()});' +
+    'try{_mo.observe(document.documentElement,{subtree:true,childList:true,attributes:true,attributeFilter:["class","style","hidden","aria-hidden"]});}catch(e4){}' +
+    'setTimeout(emitOverlayScope,10);' +
     'nav();document.readyState!=="loading"&&s()}();</script>';
 
   if (html.toLowerCase().indexOf('</body>') !== -1) {
@@ -349,10 +410,10 @@ function injectEditorBootstrap(html) {
   if (window.__pbEditorInit) return;
   window.__pbEditorInit = 1;
   var editorBases = ["/editor/", "/api/editor/"], BASE = null;
-  var MODULES = ["html-serializer.js","proto-file-manager.js","history.js","selector.js","drag-move.js","resize.js","text-edit.js","table-edit.js","image-handler.js","align-guide.js","toolbar.js","insert-panel.js","context-menu.js","dom-freeze.js","editor-core.js"];
+  var MODULES = ["html-serializer.js","proto-file-manager.js","history.js","selector.js","drag-move.js","resize.js","text-edit.js","table-edit.js","image-handler.js","align-guide.js","zoom.js","toolbar.js","insert-panel.js","context-menu.js","dom-freeze.js","editor-core.js"];
   // Bump whenever /editor/* assets change so deployed pages retire the browser
   // cache instead of running a stale (e.g. pre click-guard) module build.
-  var ASSET_VER = "2026-06-onclip-e3";
+  var ASSET_VER = "2026-09-zoom3";
   var active = false, loading = false;
   function report(){ try { window.parent.postMessage({ __pbEditReady:1, active:active }, "*"); } catch(e){} }
   function resolveBase(cb){

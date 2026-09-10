@@ -17,6 +17,20 @@ window.HVE_Selector = (function () {
   // 编辑器自身注入的元素选择器前缀
   const EDITOR_SELECTOR = '[data-hve-editor]';
 
+  // ── 扩展环境探测 ──────────────────────────────────────────────
+  // 本编辑器同时服务 Chrome 扩展（有 chrome.runtime → 选中时把样式同步给侧边栏）
+  // 与 Web/内嵌运行（proto预览 iframe、独立标签页）。Web 环境没有扩展运行时，
+  // 选中等关键路径里那段「读取 getComputedStyle 全套 + getBoundingClientRect 并
+  // 序列化发给侧边栏」的代码是纯浪费：每次选中/取消都会强制布局重排。这里先探测，
+  // 无扩展时完全跳过，避免大原型上选中卡顿。
+  function hasExtensionRuntime() {
+    try {
+      return typeof chrome !== 'undefined' && !!chrome.runtime &&
+        typeof chrome.runtime.sendMessage === 'function';
+    } catch (e) { return false; }
+  }
+  const HAS_EXT = hasExtensionRuntime();
+
   // 不可选择的元素标签
   const EXCLUDED_TAGS = new Set(['HTML', 'HEAD', 'SCRIPT', 'STYLE', 'LINK', 'META', 'BR']);
 
@@ -251,18 +265,19 @@ window.HVE_Selector = (function () {
       el.removeAttribute('data-hve-marquee-preview');
     });
 
-    // 使用缓存的候选元素（框选期间 DOM 不变）
+    // 使用缓存的候选元素及其预读矩形（框选期间 DOM 与布局都不变，
+    // 不再逐帧重读 getBoundingClientRect，避免大页面上持续强制重排）
     const candidates = cachedCandidates || getCandidateElements();
-    for (const el of candidates) {
-      const rect = el.getBoundingClientRect();
-      if (rectsIntersect(mRect, rect)) {
-        el.setAttribute('data-hve-marquee-preview', 'true');
+    for (const c of candidates) {
+      if (rectsIntersect(mRect, c.rect)) {
+        c.el.setAttribute('data-hve-marquee-preview', 'true');
       }
     }
   }
 
   function getCandidateElements() {
-    // 获取页面上所有可选的「叶子级」元素
+    // 获取页面上所有可选的「叶子级」元素，矩形在构建时一次性读取并缓存，
+    // 框选期间的逐帧高亮/命中判定直接复用，避免每帧重读布局。
     const all = document.body.querySelectorAll('*');
     const result = [];
     for (const el of all) {
@@ -272,7 +287,10 @@ window.HVE_Selector = (function () {
       if (rect.width >= window.innerWidth * 0.95 && rect.height >= window.innerHeight * 0.9) continue;
       // 确保元素可见
       if (rect.width === 0 || rect.height === 0) continue;
-      result.push(el);
+      result.push({
+        el,
+        rect: { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom, width: rect.width, height: rect.height }
+      });
     }
     return result;
   }
@@ -285,9 +303,9 @@ window.HVE_Selector = (function () {
     const candidates = cachedCandidates || getCandidateElements();
     const toSelect = [];
 
-    for (const el of candidates) {
-      const rect = el.getBoundingClientRect();
-      if (rectsIntersect(marqueeRect, rect)) {
+    for (const c of candidates) {
+      const el = c.el;
+      if (rectsIntersect(marqueeRect, c.rect)) {
         // 排除已被选中子元素的父元素（避免父子同选）
         let hasSelectedChild = false;
         for (const other of toSelect) {
@@ -695,10 +713,12 @@ window.HVE_Selector = (function () {
 
     document.dispatchEvent(new CustomEvent('hve-element-deselected', { detail: {} }));
 
-    // 通知侧边栏属性面板
-    try {
-      chrome.runtime?.sendMessage({ type: 'HVE_ELEMENT_DESELECTED' });
-    } catch (e) { /* ignore */ }
+    // 通知侧边栏属性面板（仅在扩展环境下才需要）
+    if (HAS_EXT) {
+      try {
+        chrome.runtime?.sendMessage({ type: 'HVE_ELEMENT_DESELECTED' });
+      } catch (e) { /* ignore */ }
+    }
   }
 
   function notifySelectionChanged() {
@@ -722,11 +742,13 @@ window.HVE_Selector = (function () {
         detail: { element: selectedElement }
       }));
 
-      // 通知侧边栏属性面板
-      try {
-        const cs = getComputedStyle(selectedElement);
-        const rect = selectedElement.getBoundingClientRect();
-        chrome.runtime?.sendMessage({
+      // 通知侧边栏属性面板（仅在扩展环境下执行：getComputedStyle 全套 +
+      // getBoundingClientRect 读取会强制布局重排，Web 环境下完全不需要）
+      if (HAS_EXT) {
+        try {
+          const cs = getComputedStyle(selectedElement);
+          const rect = selectedElement.getBoundingClientRect();
+          chrome.runtime?.sendMessage({
           type: 'HVE_ELEMENT_SELECTED',
           data: {
             tagName: selectedElement.tagName,
@@ -751,7 +773,8 @@ window.HVE_Selector = (function () {
             rect: { x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height) }
           }
         });
-      } catch (e) { /* ignore */ }
+        } catch (e) { /* ignore */ }
+      }
     } else if (selectedElements.length > 1) {
       // 多选模式 — 隐藏单元素工具栏和 resize，显示多选信息
       if (window.HVE_Resize) {

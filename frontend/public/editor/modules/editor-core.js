@@ -20,6 +20,8 @@ window.HVE_Core = (function () {
     if (window.HVE_PageSorter) window.HVE_PageSorter.activate();
     // 记录被编辑过的「脚本渲染区域」，保存时固化为 data-pb-frozen，避免下次加载被页面脚本重绘覆盖
     if (window.HVE_DomFreeze) window.HVE_DomFreeze.activate();
+    // 画布缩放（Ctrl+滚轮 / ⌘0 适应 / 工具栏缩放按钮）
+    if (window.HVE_Zoom) window.HVE_Zoom.activate();
 
     document.addEventListener('keydown', onKeyDown, true);
     showStatusIndicator();
@@ -46,6 +48,8 @@ window.HVE_Core = (function () {
     if (window.HVE_PDFPaginator) window.HVE_PDFPaginator.deactivate();
     if (window.HVE_ChartTypo) window.HVE_ChartTypo.deactivate();
     if (window.HVE_DomFreeze) window.HVE_DomFreeze.deactivate();
+    // 恢复缩放，收起编辑器 UI
+    if (window.HVE_Zoom) window.HVE_Zoom.deactivate();
 
     document.removeEventListener('keydown', onKeyDown, true);
     hideStatusIndicator();
@@ -55,6 +59,20 @@ window.HVE_Core = (function () {
 
   function toggle() {
     if (isActive) disable(); else enable();
+  }
+
+  // 判断是否适合快速文本编辑（与 text-edit.js 的判定保持一致）
+  function isEditableText(el) {
+    if (!el || !el.tagName) return false;
+    const TEXT_TAGS = ['P','H1','H2','H3','H4','H5','H6','SPAN','A','STRONG','EM','B','I','U',
+      'LI','TD','TH','LABEL','BUTTON','BLOCKQUOTE','FIGCAPTION','CITE','SMALL','SUB','SUP','MARK','CODE','PRE'];
+    if (TEXT_TAGS.includes(el.tagName)) return true;
+    if (el.tagName === 'DIV') {
+      const hasDirectText = Array.from(el.childNodes).some(n => n.nodeType === 3 && n.textContent.trim().length > 0);
+      const isSmall = el.children.length <= 3 && (el.textContent || '').trim().length > 0;
+      return hasDirectText || isSmall;
+    }
+    return false;
   }
 
   function onKeyDown(e) {
@@ -78,6 +96,30 @@ window.HVE_Core = (function () {
     if ((e.ctrlKey || e.metaKey) && e.key === 's') {
       e.preventDefault();
       saveCurrentFile();
+      return;
+    }
+    // Ctrl+0 适应窗口 · Ctrl+=/Ctrl+- 缩放（对标参考项目的画布缩放）
+    if ((e.ctrlKey || e.metaKey) && (e.key === '0' || e.key === 'num0')) {
+      if (window.HVE_Zoom) { e.preventDefault(); window.HVE_Zoom.fit(); }
+      return;
+    }
+    if ((e.ctrlKey || e.metaKey) && (e.key === '=' || e.key === '+' || e.key === 'numadd' || e.key === 'add')) {
+      if (window.HVE_Zoom) { e.preventDefault(); window.HVE_Zoom.zoomIn(); }
+      return;
+    }
+    if ((e.ctrlKey || e.metaKey) && (e.key === '-' || e.key === 'numsub' || e.key === 'subtract')) {
+      if (window.HVE_Zoom) { e.preventDefault(); window.HVE_Zoom.zoomOut(); }
+      return;
+    }
+    // Enter / F2：快速进入文本编辑（参考项目「Enter 编辑选中文字」）
+    if ((e.key === 'Enter' || e.key === 'F2') && !window.HVE_TextEdit?.isEditing()
+      && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      const sel = window.HVE_Selector?.getSelected();
+      if (sel && window.HVE_TextEdit?.startEditingElement && isEditableText(sel)) {
+        e.preventDefault();
+        e.stopPropagation();
+        window.HVE_TextEdit.startEditingElement(sel);
+      }
       return;
     }
     // Delete / Backspace 删除选中元素（非编辑模式下）

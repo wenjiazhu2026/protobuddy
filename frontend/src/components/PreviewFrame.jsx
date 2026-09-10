@@ -1,5 +1,6 @@
 import { useRef, useState, useEffect, useCallback, useMemo, forwardRef, useImperativeHandle } from 'react';
 import { API_BASE } from '../api.js';
+import { ANNOTATION_TYPES, typeMeta } from '../annotationType.js';
 
 /**
  * Convert a nav pathname (e.g. "/api/projects/1/preview/04-商家控制台.html")
@@ -22,6 +23,26 @@ function normalizePage(p) {
   let s = String(p || 'index.html').replace(/^\.\//, '');
   if (!s) s = 'index.html';
   return s;
+}
+
+/**
+ * 批注质量门禁（对齐参考项目的低价值/不稳定锚点检查）：
+ *  - generic：命中 HTML/BODY 等通用容器 → 视为“未绑定具体元素”，仅记页面坐标；
+ *  - noElement：未命中任何元素 → 同上，仅记录坐标；
+ *  - undersized：目标元素过小（<2px）→ 保留元素但提示锚点可能不稳定。
+ * 返回 { level: 'warn'|'pass'|'fail', message } 或 null（无问题）。
+ */
+function classifyAnchor(info) {
+  if (!info || !info.found) {
+    return { level: 'fail', message: '未命中具体元素，仅记录页面坐标' };
+  }
+  if (info.generic) {
+    return { level: 'fail', message: '命中通用容器（页面根级别），批注将按页面坐标记录' };
+  }
+  if (info.undersized) {
+    return { level: 'warn', message: '目标元素过小（<2px），锚点可能不稳定' };
+  }
+  return null;
 }
 
 /**
@@ -78,6 +99,22 @@ function PreviewFrame({ projectId, reloadNonce = 0, annotateMode, onAnnotate, an
   // Inline annotation draft (replaces window.prompt)
   const [draft, setDraft] = useState(null);
   const [draftInput, setDraftInput] = useState('');
+  const [draftType, setDraftType] = useState('字段说明');
+  // 批注模式下悬停目标元素的信息（用于“将锚定到…”提示）
+  const [hoverInfo, setHoverInfo] = useState(null);
+  const hoverRafRef = useRef(null);
+  const hoverPosRef = useRef(null);
+  // 锚点图层开关（对应参考项目“圆点显示开关”）：隐藏时不渲染任何 pin，
+  // 保留批注模式/元素探测，便于对照页面原始样式。
+  const [pinLayer, setPinLayer] = useState(true);
+  // 当前 iframe 内最高层作用域（modal:{id} / drawer:{id} / null=页面层）。
+  // 弹窗打开时只展示弹窗内批注，关闭后自动恢复页面级批注（参考项目“最高作用域”）。
+  const [overlayScope, setOverlayScope] = useState(null);
+  // 画布缩放（可视化编辑器 → __pbZoom{ k }；缩放时给 iframe 加 transform: scale，
+  // 并隐藏外层锚点/高亮层避免与缩放后的画布错位）。
+  const [visualZoom, setVisualZoom] = useState(1);
+  // 草稿点击位置的元素探测结果（异步返回后展示“将绑定…”/质量提示）
+  const [draftElement, setDraftElement] = useState(null);
 
   // Construct preview URL - use relative path so it works in both dev and prod
   const previewUrl = `${API_BASE}/projects/${projectId}/preview/`;
@@ -184,10 +221,14 @@ function PreviewFrame({ projectId, reloadNonce = 0, annotateMode, onAnnotate, an
       });
   }, [onEditorSave, allowedOrigin]);
 
-  // Only show pins for annotations on the currently displayed page
+  // Only show pins for annotations on the currently displayed page.
+  // 作用域联动：iframe 内有弹窗/抽屉打开（overlayScope 非空）时，只显示该层的
+  // 批注；关闭后恢复页面级批注（历史批注无 scope 按页面级处理，此时隐藏）。
   const visibleAnnotations = useMemo(() => {
-    return annotations.filter(a => normalizePage(a.page) === currentPage);
-  }, [annotations, currentPage]);
+    const onPage = annotations.filter(a => normalizePage(a.page) === currentPage);
+    if (!overlayScope) return onPage;
+    return onPage.filter(a => a.scope === overlayScope);
+  }, [annotations, currentPage, overlayScope]);
 
   const visibleAnnotationIds = useMemo(() => {
     return visibleAnnotations.map(a => a.id).join(',');
@@ -203,11 +244,12 @@ function PreviewFrame({ projectId, reloadNonce = 0, annotateMode, onAnnotate, an
       .map(ann => ({
         __protoQuery: 1,
         id: ann.id,
-        elementId: ann.element_info?.id || '',
+        elementId: ann.element_info?.elementId || ann.element_info?.id || '',
         path: ann.element_info?.path || '',
         // Scope resolution to the modal the annotation was made in, so a
         // same-shaped element in another level/layer is never matched.
         modalId: ann.element_info?.modalId || '',
+        scope: ann.scope || `page:${currentPage}`,
         // For old annotations without element_info, try to locate the element by
         // extracting a short keyword from the annotation content.
         text: (ann.element_info?.text || ann.content || '').slice(0, 120)
@@ -264,6 +306,7 @@ function PreviewFrame({ projectId, reloadNonce = 0, annotateMode, onAnnotate, an
       setScrollPos({ x: 0, y: 0 });
       setDocSize({ width: 1, height: 1 });
       setElementPositions({});
+      setVisualZoom(1); // 切页后回到 100%（画布缩放只属于当前页）
       setDraft(null);
       setDraftInput('');
       onPageChange?.(page);
@@ -277,6 +320,12 @@ function PreviewFrame({ projectId, reloadNonce = 0, annotateMode, onAnnotate, an
     } else if (d.__protoElementPos) {
       // store latest bounding rect for this annotation's anchor element
       setElementPositions(prev => ({ ...prev, [d.id]: d.found ? d : null }));
+    } else if (d.__protoHoverInfo) {
+      // 批注模式下悬停命中目标元素的反馈，用于“将锚定到…”提示
+      setHoverInfo(d.found ? { tag: d.tag, id: d.id, text: d.text } : null);
+    } else if (d.__protoScopeState) {
+      // iframe 内最高层弹窗作用域变化（打开/关闭弹窗或抽屉）
+      setOverlayScope(d.scope || null);
     } else if (d.__pbEditReady) {
       // Visual editor became active/ready inside the iframe -> inform parent.
       // Important: while the user has asked edit mode ON (editModeRef true) we
@@ -306,6 +355,27 @@ function PreviewFrame({ projectId, reloadNonce = 0, annotateMode, onAnnotate, an
       } else {
         handleEditorSave(page, html);
       }
+    } else if (typeof d.__pbZoom === 'number') {
+      // 可视化编辑器请求缩放：对 iframe 应用 transform: scale（缩放时外层不
+      // 改布局，编辑器 UI / 高亮都在 iframe 内随画布一起缩放）。
+      const k = Number.isFinite(d.k) ? Math.min(3, Math.max(0.4, d.k)) : 1;
+      setVisualZoom(k);
+    } else if (d.__pbZoomFit) {
+      // 适应窗口：以当前外层容器尺寸计算缩放，并回执给编辑器（用于工具栏 % 显示）。
+      try {
+        const win = iframeRef.current?.contentWindow;
+        const doc = win?.document;
+        const wrap = containerRef.current;
+        if (doc && wrap) {
+          const de = doc.scrollingElement || doc.documentElement;
+          const cw = wrap.clientWidth || 1, ch = wrap.clientHeight || 1;
+          const sw = Math.max(de.scrollWidth, doc.body?.scrollWidth || 0, 1);
+          const sh = Math.max(de.scrollHeight, doc.body?.scrollHeight || 0, 1);
+          const finalK = Math.min(2, Math.max(0.4, Math.min(1, Math.min(cw / sw, ch / sh))));
+          setVisualZoom(finalK);
+          win?.postMessage({ __pbZoomRes: { k: finalK } }, allowedOrigin);
+        }
+      } catch (_) {}
     }
   }, [onPageChange, scheduleElementQuery, allowedOrigin, sendEditMode, handleEditorSave, onEditStateChange]);
 
@@ -314,12 +384,99 @@ function PreviewFrame({ projectId, reloadNonce = 0, annotateMode, onAnnotate, an
     return () => window.removeEventListener('message', handleScrollMessage);
   }, [handleScrollMessage]);
 
+  // 批注模式下的目标元素悬停反馈：向 iframe 发送 __protoHighlight，iframe 内
+  // 用虚线框标出当前命中的元素；移出预览或退出批注模式时清除。让作者一眼看
+  // 清锚点将落在哪个区域（对应参考项目“手动选择目标区域”的交互）。
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!annotateMode || editMode) {
+      hoverPosRef.current = null;
+      setHoverInfo(null);
+      if (containerRef.current) {
+        try {
+          iframeRef.current?.contentWindow?.postMessage({ __protoHoverClear: 1 }, allowedOrigin);
+        } catch (_) {}
+      }
+      return;
+    }
+    if (!container) return;
+    const fire = () => {
+      const pos = hoverPosRef.current;
+      if (!pos) return;
+      if (hoverRafRef.current) return;
+      hoverRafRef.current = requestAnimationFrame(() => {
+        hoverRafRef.current = null;
+        try {
+          iframeRef.current?.contentWindow?.postMessage(
+            { __protoHighlight: 1, x: pos.x, y: pos.y },
+            allowedOrigin
+          );
+        } catch (_) {}
+      });
+    };
+    const onMove = (e) => {
+      const rect = container.getBoundingClientRect();
+      hoverPosRef.current = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+      fire();
+    };
+    const onLeave = () => {
+      hoverPosRef.current = null;
+      setHoverInfo(null);
+      try {
+        iframeRef.current?.contentWindow?.postMessage({ __protoHoverClear: 1 }, allowedOrigin);
+      } catch (_) {}
+    };
+    container.addEventListener('mousemove', onMove);
+    container.addEventListener('mouseleave', onLeave);
+    return () => {
+      container.removeEventListener('mousemove', onMove);
+      container.removeEventListener('mouseleave', onLeave);
+      if (hoverRafRef.current) cancelAnimationFrame(hoverRafRef.current);
+      hoverRafRef.current = null;
+    };
+  }, [annotateMode, editMode, allowedOrigin]);
+
+  // 单击列表/锚点激活某条批注时，让 iframe 滚动并闪烁高亮其目标元素，方便
+  // 评审者对照“批注说的是页面上哪一块”。仅当批注属于当前页面时触发。
+  useEffect(() => {
+    if (!activeAnnotationId) return;
+    const ann = annotations.find(a => a.id === activeAnnotationId);
+    if (!ann || normalizePage(ann.page) !== currentPage) return;
+    const t = setTimeout(() => {
+      try {
+        iframeRef.current?.contentWindow?.postMessage({
+          __protoReveal: 1,
+          id: ann.id,
+          elementId: ann.element_info?.elementId || ann.element_info?.id || null,
+          path: ann.element_info?.path || null,
+          text: ann.element_info?.text || null,
+          modalId: ann.element_info?.modalId || null,
+          scope: ann.scope || `page:${currentPage}`
+        }, allowedOrigin);
+      } catch (_) {}
+    }, 350);
+    return () => clearTimeout(t);
+  }, [activeAnnotationId, currentPage, annotations, allowedOrigin]);
+
   // When the page or the visible annotation list changes, refresh element positions
   // once the new iframe page has had time to render.
   useEffect(() => {
     const t = setTimeout(() => scheduleElementQuery(), 300);
     return () => clearTimeout(t);
   }, [currentPage, visibleAnnotationIds, scheduleElementQuery]);
+
+  // Ask the iframe for the current top overlay scope right after a fresh
+  // document loads (sub-page navigation / reload). The iframe also broadcasts
+  // __protoScopeState live on overlay open/close via its MutationObserver, so
+  // this is only a one-time polling fallback.
+  useEffect(() => {
+    const t = setTimeout(() => {
+      try {
+        iframeRef.current?.contentWindow?.postMessage({ __protoScopeNow: 1 }, allowedOrigin);
+      } catch (_) {}
+    }, 350);
+    return () => clearTimeout(t);
+  }, [currentPage, reloadNonce, allowedOrigin]);
 
   // Focus the inline input when a draft appears.
   useEffect(() => {
@@ -394,6 +551,20 @@ function PreviewFrame({ projectId, reloadNonce = 0, annotateMode, onAnnotate, an
     });
   }, []);
 
+  // 批注草稿出现后，异步等待元素探测结果（用于草稿卡上的目标/质量提示）。
+  useEffect(() => {
+    if (!draft) {
+      setDraftElement(null);
+      return;
+    }
+    let alive = true;
+    (async () => {
+      const info = await waitForProbe(draft.probeId, 600);
+      if (alive) setDraftElement(info);
+    })();
+    return () => { alive = false; };
+  }, [draft, waitForProbe]);
+
   const handleClick = (e) => {
     if (!annotateMode || editMode) return;
     if (!containerRef.current) return;
@@ -430,14 +601,24 @@ function PreviewFrame({ projectId, reloadNonce = 0, annotateMode, onAnnotate, an
 
     // Wait a moment for the probe result; the async wait is much more reliable
     // than the old synchronous window.prompt because the event loop stays alive.
-    const elementInfo = await waitForProbe(draft.probeId, 500);
+    const elementInfoRaw = await waitForProbe(draft.probeId, 500);
+    const elementInfo = elementInfoRaw?.found ? elementInfoRaw : null;
+
+    // 质量门禁：generic（通用容器/页面根）或未命中元素时，不写 element_info，
+    // 批注退化为页面坐标记录（草稿卡上已用红/黄提示告知作者）。
+    const anchorIssue = classifyAnchor(elementInfo);
+    const storeElement = (elementInfo && anchorIssue?.level !== 'fail') ? elementInfo : undefined;
 
     onAnnotate({
       x: Math.round(draft.x * 10) / 10,
       y: Math.round(draft.y * 10) / 10,
       content,
+      type: draftType || '字段说明',
       page: currentPage,
-      element_info: elementInfo && elementInfo.found ? elementInfo : undefined,
+      // 作用域：探针回传（modal:{id} / page:{page}），保存到批注记录；
+      // 无法探测时退化为页面级。
+      scope: elementInfo?.scope || `page:${currentPage}`,
+      element_info: storeElement,
       // Persist document-relative coordinates as a robust fallback.
       doc_x: elementInfo?.docX ?? (draft.x / 100),
       doc_y: elementInfo?.docY ?? (draft.y / 100)
@@ -478,8 +659,14 @@ function PreviewFrame({ projectId, reloadNonce = 0, annotateMode, onAnnotate, an
       const x = rect.left + rect.width * offsetX;
       const y = rect.top + rect.height * offsetY;
 
-      const leftPct = (x / containerRect.width) * 100;
-      const topPct = (y / containerRect.height) * 100;
+      // 夹紧：目标元素可能被 iframe 视口部分裁剪（对应参考项目的
+      // getClippedTargetRect），把锚点钳制到预览容器可见范围内，避免
+      // 部分可见元素把 pin 推到 iframe 之外（对应字段仍灰显直到滚回）。
+      const margin = 10;
+      const cx = Math.min(Math.max(x, margin), containerRect.width - margin);
+      const cy = Math.min(Math.max(y, margin), containerRect.height - margin);
+      const leftPct = (cx / containerRect.width) * 100;
+      const topPct = (cy / containerRect.height) * 100;
 
       // Hide the pin if its anchor point is well outside the visible viewport
       // (kept in DOM so it can reappear smoothly when scrolled back).
@@ -522,7 +709,7 @@ function PreviewFrame({ projectId, reloadNonce = 0, annotateMode, onAnnotate, an
     const inViewport = viewportY >= -buffer && viewportY <= containerRect.height + buffer
       && viewportX >= -buffer && viewportX <= containerRect.width + buffer;
 
-    return {
+    const fallbackStyle = {
       left: `${leftPct}%`,
       top: `${topPct}%`,
       transform: 'translate(-50%, -100%)',
@@ -530,10 +717,23 @@ function PreviewFrame({ projectId, reloadNonce = 0, annotateMode, onAnnotate, an
       pointerEvents: inViewport ? 'auto' : 'none',
       transition: 'opacity 0.15s ease, top 0.1s ease-out, left 0.1s ease-out'
     };
+
+    // 已锚定元素的批注只有在元素可见时才显示；元素当前不可见（滚动远离、弹窗
+    // 关闭、hidden）时不要用文档坐标兜底冒出来——锚点保持隐藏直到目标回到视野。
+    // 只有真正没有 element_info 的历史批注才走上面的坐标兜底。
+    if (ann.element_info?.found) {
+      return { ...fallbackStyle, opacity: 0, pointerEvents: 'none' };
+    }
+    return fallbackStyle;
   };
 
   return (
-    <div className="preview-iframe-wrapper" ref={containerRef} onClick={handleClick}>
+    <div
+      className="preview-iframe-wrapper"
+      ref={containerRef}
+      onClick={handleClick}
+      style={visualZoom !== 1 ? { overflow: 'auto' } : undefined}
+    >
       <iframe
         ref={iframeRef}
         key={mountNonce + ':' + iframeKey}
@@ -546,17 +746,44 @@ function PreviewFrame({ projectId, reloadNonce = 0, annotateMode, onAnnotate, an
           // the current mode so a quick toggle right after load is not missed.
           if (editModeRef.current) sendEditMode(0);
         }}
+        style={visualZoom !== 1
+          ? { transform: `scale(${visualZoom})`, transformOrigin: 'top left', transition: 'transform 0.18s ease' }
+          : undefined}
       />
+      {/* 锚点图层开关（不遮挡业务元素；编辑模式下不显示） */}
+      {!editMode && (
+        <button
+          type="button"
+          className={`preview-pin-toggle ${pinLayer ? 'on' : ''}`}
+          onClick={() => setPinLayer(v => !v)}
+          title={pinLayer ? '隐藏锚点圆点' : '显示锚点圆点'}
+          aria-label={pinLayer ? '隐藏锚点' : '显示锚点'}
+        >
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M12 0C7.58 0 4 3.58 4 8c0 5.25 8 16 8 16s8-10.75 8-16c0-4.42-3.58-8-8-8z" />
+            <circle cx="12" cy="8" r="3.5" />
+          </svg>
+          <span>{pinLayer ? '隐藏' : '显示'}</span>
+        </button>
+      )}
       {/* Transparent overlay - sits on top of iframe, same size.
           In visual-edit mode the pointer must reach the iframe (the editor
-          handles clicks INSIDE the page), so the overlay never captures. */}
+          handles clicks INSIDE the page), so the overlay never captures.
+          画布缩放（visualZoom ≠ 1）时隐藏整层：锚点/高亮/草稿卡都按未缩放坐标
+          定位，与缩放后的画布错位，编辑画布期间隐藏更干净。 */}
       <div
         className={`annotation-overlay ${annotateMode && !editMode ? 'mode-annotate' : ''}`}
-        style={{ pointerEvents: annotateMode && !editMode ? 'auto' : 'none' }}
+        style={{
+          pointerEvents: annotateMode && !editMode ? 'auto' : 'none',
+          opacity: visualZoom !== 1 ? 0 : 1,
+          transition: 'opacity 0.15s ease'
+        }}
       >
-        {visibleAnnotations.map((ann, idx) => {
+        {pinLayer && visibleAnnotations.map((ann, idx) => {
           const statusClass = ann.status === 'resolved' ? 'resolved' : ann.status === 'rejected' ? 'rejected' : '';
-          const pinColor = ann.status === 'resolved' ? 'var(--green)' : ann.status === 'rejected' ? 'var(--gray-400)' : 'var(--orange)';
+          const pinColor = ann.status === 'resolved' ? 'var(--green)'
+          : ann.status === 'rejected' ? 'var(--gray-400)'
+          : ANNOTATION_TYPES.includes(ann.type) ? typeMeta(ann.type).color : 'var(--orange)';
           const style = getPinStyle(ann);
           return (
             <div
@@ -604,6 +831,44 @@ function PreviewFrame({ projectId, reloadNonce = 0, annotateMode, onAnnotate, an
             }}
             onClick={(e) => e.stopPropagation()}
           >
+            {/* 批注类型（参考项目四类注记：字段说明/交互逻辑/业务规则/修改原型） */}
+            <div className="annotation-draft-type-row">
+              <span className="annotation-draft-type-dot" style={{ background: typeMeta(draftType).color }} />
+              <select
+                className="annotation-draft-type-select"
+                value={draftType}
+                onChange={(e) => setDraftType(e.target.value)}
+                aria-label="批注类型"
+              >
+                {ANNOTATION_TYPES.map(t => (
+                  <option key={t} value={t}>{t}</option>
+                ))}
+              </select>
+            </div>
+            {/* 质量门禁提示：未命中/通用容器/过小元素；元素命中且质量良好时给锚定反馈 */}
+            {(() => {
+              const issue = draftElement ? classifyAnchor(draftElement) : null;
+              if (issue) {
+                return (
+                  <div className={`annotation-draft-warn ${issue.level}`}>
+                    <span>{issue.level === 'fail' ? '注意' : '提示'}</span>
+                    {issue.message}
+                  </div>
+                );
+              }
+              if (draftElement?.found) {
+                return (
+                  <div className="annotation-draft-anchor">
+                    <span className="annotation-mag-dot" />
+                    将锚定到 {draftElement.tagName}{draftElement.elementId ? `#${draftElement.elementId}` : ''}
+                    {draftElement.scope && draftElement.scope.startsWith('modal:') ? '（弹窗内）' : draftElement.scope?.startsWith('drawer:') ? '（抽屉内）' : ''}
+                  </div>
+                );
+              }
+              return draftElement === null ? null : (
+                <div className="annotation-draft-anchor annotation-draft-anchor-probe">正在探测目标元素…</div>
+              );
+            })()}
             <textarea
               ref={draftInputRef}
               value={draftInput}
@@ -636,6 +901,45 @@ function PreviewFrame({ projectId, reloadNonce = 0, annotateMode, onAnnotate, an
                 确认
               </button>
             </div>
+          </div>
+        )}
+
+        {/* 激活批注的目标区域高亮（对应参考项目“打开注记时高亮目标区域”） */}
+        {(() => {
+          if (visualZoom !== 1) return null; // 缩放画布时外层层不再对齐
+          if (!activeAnnotationId) return null;
+          const pos = elementPositions[activeAnnotationId];
+          if (!pos?.found || !pos?.rect) return null;
+          const crect = containerRef.current?.getBoundingClientRect?.();
+          if (!crect || crect.width < 1 || crect.height < 1) return null;
+          const rect = pos.rect;
+          // 夹紧到预览视口（部分可见目标只高亮可见交叠区，避免高亮越出 iframe）
+          const vleft = Math.max(0, rect.left);
+          const vtop = Math.max(0, rect.top);
+          const vright = Math.min(crect.width, rect.left + rect.width);
+          const vbottom = Math.min(crect.height, rect.top + rect.height);
+          const vw = Math.max(2, vright - vleft);
+          const vh = Math.max(2, vbottom - vtop);
+          return (
+            <div
+              className="annotation-active-hl"
+              style={{
+                position: 'absolute',
+                left: `${(vleft / crect.width) * 100}%`,
+                top: `${(vtop / crect.height) * 100}%`,
+                width: `${(vw / crect.width) * 100}%`,
+                height: `${(vh / crect.height) * 100}%`
+              }}
+            />
+          );
+        })()}
+
+        {/* 批注模式下悬停目标元素的提示 */}
+        {annotateMode && !editMode && visualZoom === 1 && hoverInfo && (
+          <div className="annotation-hover-hint">
+            <span>将锚定到</span>
+            <b>{hoverInfo.tag}{hoverInfo.id ? `#${hoverInfo.id}` : ''}</b>
+            {hoverInfo.text ? <em>{hoverInfo.text.slice(0, 36)}</em> : null}
           </div>
         )}
       </div>
