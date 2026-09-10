@@ -456,10 +456,13 @@ async function servePreview(req, res, next) {
     let reqPath = req.params[0] || '';
     if (!reqPath || reqPath === '' || reqPath === '/') {
       // Use the storage driver's entry point discovery: root index.html first,
-      // otherwise the index.html inside a subdirectory (e.g. ZIPs that wrap
-      // everything in a top-level folder).
+      // otherwise the index.html inside the shallowest subdirectory (ZIPs often
+      // wrap everything in a top-level folder, e.g. "原型设计/").
       const entry = await findEntryPoint(req.params.id);
       reqPath = entry ? `${entry}/index.html` : 'index.html';
+    } else if (reqPath.endsWith('/')) {
+      // Directory-style request (/preview/phase-2/) -> its index.html
+      reqPath += 'index.html';
     }
 
   // Guard against traversal (the storage drivers normalize paths, but be explicit)
@@ -476,13 +479,16 @@ async function servePreview(req, res, next) {
   // "原型设计/") but the iframe root URL is /preview/, so relative sub-page
   // links resolve against the root (e.g. /preview/04-商家控制台.html). Retry
   // with the entry directory prefix so those links serve correctly.
+  // The entry directory IS the prototype root, so the prefix is `${entry}/`
+  // (the old code took entry's PARENT dir, which only worked when the entry
+  // happened to be nested and broke single-level entries like `phase-2/`).
   if (!content) {
     const entry = await findEntryPoint(req.params.id);
-    const entryDir = entry && entry.includes('/') ? entry.slice(0, entry.lastIndexOf('/') + 1) : '';
-    if (entryDir && !reqPath.startsWith(entryDir)) {
-      content = await readFileContent(req.params.id, entryDir + reqPath);
+    const entryRoot = entry ? `${entry}/` : '';
+    if (entryRoot && !reqPath.startsWith(entryRoot)) {
+      content = await readFileContent(req.params.id, entryRoot + reqPath);
       if (!content) {
-        content = await readFileContent(req.params.id, `${entryDir}${reqPath}/index.html`);
+        content = await readFileContent(req.params.id, `${entryRoot}${reqPath}/index.html`);
       }
     }
   }

@@ -195,17 +195,42 @@ export async function deleteFile(projectId, filePath) {
   return true;
 }
 
-// Find entry point (index.html): root first, else any subdirectory
+/**
+ * Order candidate entry directories: shallowest first (the project's own entry
+ * page), then alphabetically so the result is stable across listings.
+ */
+function compareEntryDirs(a, b) {
+  const da = a.split('/').length;
+  const db = b.split('/').length;
+  if (da !== db) return da - db;
+  return a.localeCompare(b);
+}
+
+// Find the entry point (index.html): the project root wins; otherwise the
+// SHALLOWEST directory holding an index.html.
+//
+// Depth-first (then alphabetical) rather than "first key in the listing":
+// listing order made the pick arbitrary and could resolve a nested sub-app
+// entry (e.g. `原型设计/call-analysis/index.html`) instead of the project's
+// own entry page (`原型设计/index.html`) — the preview then opened the wrong
+// document on every visit.
 export async function findEntryPoint(projectId) {
   const store = await getStoreInstance();
   const rootIndex = await store.get(keyFor(projectId, 'index.html'));
   if (rootIndex !== null) return '';
 
   const { blobs } = await store.list({ prefix: keyFor(projectId, '') });
-  const match = blobs.map(b => b.key).find(k => /\/index\.html$/.test(k));
-  if (!match) return '';
   const prefixLen = keyFor(projectId, '').length;
-  return match.slice(prefixLen).replace(/\/index\.html$/, '') || '';
+  const dirs = [];
+  for (const b of blobs) {
+    const rel = b.key.slice(prefixLen);
+    if (!/(^|\/)index\.html$/i.test(rel)) continue;
+    const dir = rel.replace(/(^|\/)index\.html$/i, '');
+    if (dir && !dirs.includes(dir)) dirs.push(dir);
+  }
+  if (!dirs.length) return '';
+  dirs.sort(compareEntryDirs);
+  return dirs[0];
 }
 
 // Approximate file size in bytes

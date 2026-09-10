@@ -129,6 +129,14 @@ export function readFileContent(projectId, filePath) {
   const fullPath = resolveFilePath(projectId, filePath);
   if (!fullPath) return null;
 
+  // A directory path (e.g. "phase-2/") must not be read as a file: readFileSync
+  // throws EISDIR, which surfaced as a 500 instead of a plain "not found".
+  try {
+    if (fs.statSync(fullPath).isDirectory()) return null;
+  } catch {
+    return null;
+  }
+
   const ext = path.extname(filePath).toLowerCase();
 
   if (BINARY_EXTS.includes(ext)) {
@@ -172,24 +180,48 @@ export function deleteFile(projectId, filePath) {
   return false;
 }
 
-// Find the entry point (index.html) - might be at root or in a subdirectory
+// Find the entry point (index.html): the project root wins; otherwise the
+// SHALLOWEST directory holding an index.html.
+//
+// Recursive (the old version only looked one level deep, so a project whose
+// entry sat deeper had no entry at all) and depth-first rather than
+// "first directory found": a nested sub-app page (e.g.
+// `原型设计/call-analysis/index.html`) must never shadow the project's own
+// entry page (`原型设计/index.html`).
 export function findEntryPoint(projectId) {
   const projectDir = getProjectDir(projectId);
 
-  // Try root index.html first
-  const rootIndex = path.join(projectDir, 'index.html');
-  if (fs.existsSync(rootIndex)) return '';
+  // Root index.html wins outright
+  if (fs.existsSync(path.join(projectDir, 'index.html'))) return '';
 
-  // Search subdirectories (one level deep)
-  const entries = fs.readdirSync(projectDir, { withFileTypes: true });
-  for (const entry of entries) {
-    if (entry.isDirectory()) {
-      const subIndex = path.join(projectDir, entry.name, 'index.html');
-      if (fs.existsSync(subIndex)) return entry.name;
+  const dirs = [];
+  const MAX_DEPTH = 5;
+  const walk = (dir, rel, depth) => {
+    if (depth > MAX_DEPTH) return;
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
     }
-  }
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      if (entry.name === 'node_modules' || entry.name.startsWith('.')) continue;
+      const childRel = rel ? `${rel}/${entry.name}` : entry.name;
+      if (fs.existsSync(path.join(dir, entry.name, 'index.html'))) dirs.push(childRel);
+      walk(path.join(dir, entry.name), childRel, depth + 1);
+    }
+  };
+  walk(projectDir, '', 1);
 
-  return '';
+  if (!dirs.length) return '';
+  dirs.sort((a, b) => {
+    const da = a.split('/').length;
+    const db = b.split('/').length;
+    if (da !== db) return da - db;
+    return a.localeCompare(b);
+  });
+  return dirs[0];
 }
 
 // Get the absolute path for serving static files
