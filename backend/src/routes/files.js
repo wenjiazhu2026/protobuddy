@@ -20,6 +20,22 @@ function mimeFor(filePath) {
   return MIME_BY_EXT[ext] || null;
 }
 
+/**
+ * Build an RFC 6266 Content-Disposition value.
+ *
+ * HTTP header values must be Latin-1: passing a non-ASCII filename (very common
+ * here — prototype files are named in Chinese) makes Node throw
+ * `ERR_INVALID_CHAR: Invalid character in header content ["Content-Disposition"]`,
+ * which kills the download with a 500 / broken connection. The real name is
+ * carried verbatim in `filename*` (RFC 5987, percent-encoded UTF-8) while the
+ * legacy `filename=` parameter gets an ASCII-only fallback.
+ */
+function contentDisposition(fileName) {
+  const name = String(fileName || 'file');
+  const ascii = name.replace(/[^\x20-\x7E]/g, '_').replace(/["\\]/g, '_') || 'file';
+  return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`;
+}
+
 // List files for a project
 router.get('/:id/files', async (req, res) => {
   const project = await getById('projects', req.params.id);
@@ -52,7 +68,7 @@ router.get('/:id/files/*', async (req, res) => {
   // ?download=1  -> stream the actual bytes with a download disposition
   if (String(req.query.download) === '1') {
     const name = filePath.split('/').pop() || 'file';
-    res.set('Content-Disposition', `attachment; filename="${name}"; filename*=UTF-8''${encodeURIComponent(name)}`);
+    res.set('Content-Disposition', contentDisposition(name));
     res.set('X-Content-Type-Options', 'nosniff');
     if (content.binary) {
       const buf = Buffer.from(content.data, 'base64');
@@ -118,7 +134,7 @@ router.get('/:id/export', async (req, res) => {
   }
 
   const safe = `${(project.name || 'prototype').replace(/[\/\\:*?"<>|]/g, '_')}_v${project.version || 1}.zip`;
-  res.set('Content-Disposition', `attachment; filename="${safe}"; filename*=UTF-8''${encodeURIComponent(safe)}`);
+  res.set('Content-Disposition', contentDisposition(safe));
   res.type('application/zip');
   res.send(out);
 });

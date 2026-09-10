@@ -270,6 +270,41 @@ export default function Dashboard() {
     }
   };
 
+  /**
+   * Export the selected file to the local machine.
+   *
+   * Done in JS (fetch -> Blob -> <a download>) instead of a bare
+   * `<a href download>` so failures surface as a toast instead of a silent
+   * no-op, and so the saved filename is the real one (Chinese names included).
+   */
+  const handleExportFile = async () => {
+    if (!selectedFile) return;
+    const name = selectedFile.path.split('/').pop() || 'file';
+    try {
+      const res = await fetch(api.fileDownloadUrl(id, selectedFile.path));
+      if (!res.ok) {
+        let detail = `HTTP ${res.status}`;
+        try {
+          const data = await res.json();
+          if (data && data.error) detail = data.error;
+        } catch { /* not JSON */ }
+        throw new Error(detail);
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 15000);
+      showToast(`已导出 ${name}`, 'success');
+    } catch (err) {
+      showToast('导出失败: ' + err.message, 'error');
+    }
+  };
+
   const fileIcon = (path) => {
     const ext = path.split('.').pop().toLowerCase();
     const icons = {
@@ -520,14 +555,13 @@ export default function Dashboard() {
                       <button className="btn btn-sm btn-secondary" onClick={() => setEditing(true)}>编辑</button>
                     )
                   )}
-                  <a
+                  <button
                     className="btn btn-sm btn-secondary"
-                    href={api.fileDownloadUrl(id, selectedFile.path)}
-                    download
-                    title={`下载 ${selectedFile.path.split('/').pop()}`}
+                    onClick={handleExportFile}
+                    title={`导出 ${selectedFile.path.split('/').pop()} 到本地`}
                   >
-                    ⭳ 下载
-                  </a>
+                    ⭳ 导出
+                  </button>
                 </div>
               </div>
               <div style={{ flex: 1, overflow: 'auto', padding: 16 }}>

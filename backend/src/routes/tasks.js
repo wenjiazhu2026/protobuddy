@@ -356,7 +356,9 @@ router.get('/:id/tasks/export', async (req, res) => {
 
   const tasks = await getProjectTasks(req.params.id);
   const format = (req.query.format || 'json').toLowerCase();
-  const slug = project.slug || project.id;
+  // Header values must be Latin-1 — keep the filename ASCII-only (slugs are
+  // generated ASCII, but legacy records may hold anything).
+  const slug = String(project.slug || project.id).replace(/[^A-Za-z0-9._-]/g, '_');
 
   if (format === 'csv') {
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
