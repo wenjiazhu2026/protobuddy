@@ -349,10 +349,10 @@ function injectEditorBootstrap(html) {
   if (window.__pbEditorInit) return;
   window.__pbEditorInit = 1;
   var editorBases = ["/editor/", "/api/editor/"], BASE = null;
-  var MODULES = ["html-serializer.js","proto-file-manager.js","history.js","selector.js","drag-move.js","resize.js","text-edit.js","table-edit.js","image-handler.js","align-guide.js","toolbar.js","insert-panel.js","context-menu.js","editor-core.js"];
+  var MODULES = ["html-serializer.js","proto-file-manager.js","history.js","selector.js","drag-move.js","resize.js","text-edit.js","table-edit.js","image-handler.js","align-guide.js","toolbar.js","insert-panel.js","context-menu.js","dom-freeze.js","editor-core.js"];
   // Bump whenever /editor/* assets change so deployed pages retire the browser
   // cache instead of running a stale (e.g. pre click-guard) module build.
-  var ASSET_VER = "2026-06-onclip-e2";
+  var ASSET_VER = "2026-06-onclip-e3";
   var active = false, loading = false;
   function report(){ try { window.parent.postMessage({ __pbEditReady:1, active:active }, "*"); } catch(e){} }
   function resolveBase(cb){

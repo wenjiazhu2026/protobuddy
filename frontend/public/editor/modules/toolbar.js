@@ -495,7 +495,9 @@ window.HVE_Toolbar = (function () {
       case 'save':
         if (window.HVE_Core) window.HVE_Core.saveCurrentFile();
         else if (window.HVE_Serializer && window.HVE_FileManager) {
-          const html = window.HVE_Serializer.serialize();
+          if (window.HVE_DomFreeze) window.HVE_DomFreeze.commit();
+          let html = window.HVE_Serializer.serialize();
+          if (window.HVE_DomFreeze) html = window.HVE_DomFreeze.embedRestore(html);
           window.HVE_FileManager.saveFile(html).then(result => {
             const ok = !!(result && result.ok);
             const errMsg = (result && result.error) || '';

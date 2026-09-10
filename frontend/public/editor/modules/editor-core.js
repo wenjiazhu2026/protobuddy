@@ -18,6 +18,8 @@ window.HVE_Core = (function () {
     if (window.HVE_ContextMenu) window.HVE_ContextMenu.activate();
     if (window.HVE_AlignGuide) window.HVE_AlignGuide.activate();
     if (window.HVE_PageSorter) window.HVE_PageSorter.activate();
+    // 记录被编辑过的「脚本渲染区域」，保存时固化为 data-pb-frozen，避免下次加载被页面脚本重绘覆盖
+    if (window.HVE_DomFreeze) window.HVE_DomFreeze.activate();
 
     document.addEventListener('keydown', onKeyDown, true);
     showStatusIndicator();
@@ -43,6 +45,7 @@ window.HVE_Core = (function () {
     if (window.HVE_Canvas) window.HVE_Canvas.deactivate();
     if (window.HVE_PDFPaginator) window.HVE_PDFPaginator.deactivate();
     if (window.HVE_ChartTypo) window.HVE_ChartTypo.deactivate();
+    if (window.HVE_DomFreeze) window.HVE_DomFreeze.deactivate();
 
     document.removeEventListener('keydown', onKeyDown, true);
     hideStatusIndicator();
@@ -267,16 +270,25 @@ window.HVE_Core = (function () {
     }
   }
 
+  // 序列化当前页面为「可持久化」的 HTML：先固化脚本渲染区域的编辑结果，再注入还原脚本。
+  function serializeForSave() {
+    if (!window.HVE_Serializer) return '';
+    if (window.HVE_DomFreeze) window.HVE_DomFreeze.commit();
+    let html = window.HVE_Serializer.serialize();
+    if (window.HVE_DomFreeze) html = window.HVE_DomFreeze.embedRestore(html);
+    return html;
+  }
+
   async function saveCurrentFile() {
     if (!window.HVE_Serializer || !window.HVE_FileManager) return;
-    const html = window.HVE_Serializer.serialize();
+    const html = serializeForSave();
     const result = await window.HVE_FileManager.saveFile(html);
     showSaveResult(result);
   }
 
   async function saveCurrentFileAs() {
     if (!window.HVE_Serializer || !window.HVE_FileManager) return;
-    const html = window.HVE_Serializer.serialize();
+    const html = serializeForSave();
     const result = await window.HVE_FileManager.saveFileAs(html);
     showSaveResult(result);
   }
@@ -538,6 +550,6 @@ window.HVE_Core = (function () {
 
   return {
     enable, disable, toggle, getState, showToast, groupElements, ungroupElement,
-    saveCurrentFile, saveCurrentFileAs
+    saveCurrentFile, saveCurrentFileAs, serializeForSave
   };
 })();
