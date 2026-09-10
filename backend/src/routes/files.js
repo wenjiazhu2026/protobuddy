@@ -170,6 +170,12 @@ router.delete('/:id/files/*', requireOwnerAuth, async (req, res) => {
   const existing = await query('files', f => String(f.project_id) === String(req.params.id) && f.path === filePath);
   for (const f of existing) await remove('files', f.id);
 
+  // Stored-content change = a new prototype version, same convention as
+  // uploads and edits (keeps the "平台存储 v{n}" badge consistent).
+  await update('projects', req.params.id, {
+    version: (project.version || 0) + 1
+  });
+
   res.json({ success: true });
 });
 

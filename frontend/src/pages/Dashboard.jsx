@@ -253,6 +253,23 @@ export default function Dashboard() {
     }
   };
 
+  const handleDeleteFile = async (file) => {
+    if (!confirm(`确定删除文件「${file.path}」？此操作不可恢复。`)) return;
+    try {
+      // Owner operation: deleting prototype files is owner maintenance
+      await guard(id, () => api.deleteFile(id, file.path, getOwnerToken(id)));
+      showToast(`已删除 ${file.path}`, 'success');
+      if (selectedFile && String(selectedFile.id) === String(file.id)) {
+        setSelectedFile(null);
+        setFileContent('');
+        setEditing(false);
+      }
+      load(); // refresh file list + version + deploy status
+    } catch (err) {
+      if (err.message !== 'owner verification cancelled') showToast('删除失败: ' + err.message, 'error');
+    }
+  };
+
   const fileIcon = (path) => {
     const ext = path.split('.').pop().toLowerCase();
     const icons = {
@@ -474,6 +491,14 @@ export default function Dashboard() {
                     {formatFileTime(f.updated_at)}
                   </span>
                 )}
+                <button
+                  className="file-delete-btn"
+                  title={`删除 ${f.path}`}
+                  aria-label={`删除 ${f.path}`}
+                  onClick={(e) => { e.stopPropagation(); handleDeleteFile(f); }}
+                >
+                  ✕
+                </button>
               </div>
             ))
           )}
