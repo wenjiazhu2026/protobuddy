@@ -496,8 +496,10 @@ window.HVE_Toolbar = (function () {
         if (window.HVE_Core) window.HVE_Core.saveCurrentFile();
         else if (window.HVE_Serializer && window.HVE_FileManager) {
           const html = window.HVE_Serializer.serialize();
-          window.HVE_FileManager.saveFile(html).then(ok => {
-            if (window.HVE_Core) window.HVE_Core.showToast(ok ? '文件已保存 ✓' : '保存失败', ok ? 'success' : 'error');
+          window.HVE_FileManager.saveFile(html).then(result => {
+            const ok = !!(result && result.ok);
+            const errMsg = (result && result.error) || '';
+            if (window.HVE_Core) window.HVE_Core.showToast(ok ? '文件已保存 ✓' : (errMsg ? '保存失败：' + errMsg : '保存失败'), ok ? 'success' : 'error');
           });
         }
         break;

@@ -31,11 +31,20 @@ window.HVE_FileManager = (function () {
    * 1) 有外层应用（同源 iframe）→ postMessage 交给外层写回平台
    * 2) 无外层（新标签页独立打开）→ 降级为浏览器下载
    */
+  /**
+   * 保存结果统一为 { ok: boolean, error?: string }，便于上层区分成败并展示原因。
+   * 此前 saveFile 直接返回 boolean，且 saveViaParent 只看外层回执里有没有 page
+   * 字段就判成功——导致外层保存失败（取消 owner 密码验证、写回被拒、请求体超限
+   * 等）时仍提示「文件已保存 ✓」，改动其实没落盘，再次进入评审就“看起来”恢复成
+   * 旧内容了。这里改为以回执的 ok 字段为准，并把 error 透传出去。
+   */
   function saveFile(html) {
     if (window.parent && window.parent !== window) {
       return saveViaParent(html);
     }
-    return Promise.resolve(downloadFile(html, getFileName() || 'edited.html'));
+    // 无外层应用（独立标签页打开）时降级为浏览器下载
+    var ok = downloadFile(html, getFileName() || 'edited.html');
+    return Promise.resolve(ok ? { ok: true } : { ok: false, error: '下载保存失败' });
   }
 
   function saveViaParent(html) {
@@ -45,22 +54,24 @@ window.HVE_FileManager = (function () {
         if (done) return;
         done = true;
         window.removeEventListener('message', onMsg);
-        resolve(false); // 超时 -> 外层未响应（可能已关闭）
+        resolve({ ok: false, error: '保存超时（外层应用未响应）' });
       }, 30000);
 
-      function finish(ok) {
+      function finish(result) {
         if (done) return;
         done = true;
         clearTimeout(timer);
         window.removeEventListener('message', onMsg);
-        resolve(!!ok);
+        resolve(result);
       }
 
       function onMsg(e) {
         var d = e.data;
         if (!d || !d.__pbSaveRes) return;
-        if (d.__pbSaveRes.page !== undefined) {
-          finish(true);
+        var r = d.__pbSaveRes;
+        // 仅认回执里的 ok：ok 为真才判成功，否则把 error 透传给上层提示。
+        if (r.page !== undefined) {
+          finish(r.ok ? { ok: true } : { ok: false, error: r.error || '保存失败' });
         }
       }
 
@@ -68,7 +79,7 @@ window.HVE_FileManager = (function () {
       try {
         window.parent.postMessage({ __pbSave: { page: getPage(), html: html } }, '*');
       } catch (e) {
-        finish(false);
+        finish({ ok: false, error: (e && e.message) || 'postMessage 失败' });
       }
     });
   }

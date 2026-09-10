@@ -210,7 +210,10 @@ router.delete('/:id/files/*', requireOwnerAuth, async (req, res) => {
 function injectScrollSyncScript(html) {
   if (!html || html.indexOf('__protoScrollInjected') !== -1) return html;
 
-  const script = '<script>/*proto-scroll-sync*/!function(){if(window.__protoScrollInjected)return;window.__protoScrollInjected=1;' +
+  // data-hve-editor 标记让编辑器的序列化器（html-serializer.js）在保存时把这段
+  // 运行时注入脚本一并剥离，避免把它（含 __protoScrollInjected 标记、window.open
+  // 覆写、点击拦截）持久化进原型文件。服务端每次 serve 都会重新注入，不受影响。
+  const script = '<script data-hve-editor="true">/*proto-scroll-sync*/!function(){if(window.__protoScrollInjected)return;window.__protoScrollInjected=1;' +
     // 1. scroll sync (also report document size so the overlay can map
     //    document-relative anchor percentages to the current viewport)
     'function s(){try{window.parent.postMessage({__protoScroll:1,x:window.scrollX||0,y:window.scrollY||0,docWidth:Math.max(document.documentElement.scrollWidth||1,document.body.scrollWidth||1),docHeight:Math.max(document.documentElement.scrollHeight||1,document.body.scrollHeight||1)},"*")}catch(e){}}' +
@@ -349,7 +352,7 @@ function injectEditorBootstrap(html) {
   var MODULES = ["html-serializer.js","proto-file-manager.js","history.js","selector.js","drag-move.js","resize.js","text-edit.js","table-edit.js","image-handler.js","align-guide.js","toolbar.js","insert-panel.js","context-menu.js","editor-core.js"];
   // Bump whenever /editor/* assets change so deployed pages retire the browser
   // cache instead of running a stale (e.g. pre click-guard) module build.
-  var ASSET_VER = "2026-06-onclip-e1";
+  var ASSET_VER = "2026-06-onclip-e2";
   var active = false, loading = false;
   function report(){ try { window.parent.postMessage({ __pbEditReady:1, active:active }, "*"); } catch(e){} }
   function resolveBase(cb){

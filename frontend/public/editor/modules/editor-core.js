@@ -270,15 +270,22 @@ window.HVE_Core = (function () {
   async function saveCurrentFile() {
     if (!window.HVE_Serializer || !window.HVE_FileManager) return;
     const html = window.HVE_Serializer.serialize();
-    const success = await window.HVE_FileManager.saveFile(html);
-    showToast(success ? '文件已保存 ✓' : '保存失败', success ? 'success' : 'error');
+    const result = await window.HVE_FileManager.saveFile(html);
+    showSaveResult(result);
   }
 
   async function saveCurrentFileAs() {
     if (!window.HVE_Serializer || !window.HVE_FileManager) return;
     const html = window.HVE_Serializer.serialize();
-    const success = await window.HVE_FileManager.saveFileAs(html);
-    showToast(success ? '文件已保存 ✓' : '保存失败', success ? 'success' : 'error');
+    const result = await window.HVE_FileManager.saveFileAs(html);
+    showSaveResult(result);
+  }
+
+  // 统一处理保存结果：成功提示已保存，失败把具体原因展示出来（而非笼统的「保存失败」）
+  function showSaveResult(result) {
+    const ok = !!(result && result.ok);
+    const errMsg = (result && result.error) || '';
+    showToast(ok ? '文件已保存 ✓' : (errMsg ? '保存失败：' + errMsg : '保存失败'), ok ? 'success' : 'error');
   }
 
   function showStatusIndicator() {
