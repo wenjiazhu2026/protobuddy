@@ -87,13 +87,15 @@ export default function Review() {
       .catch(() => {});
   }, [id]);
 
-  const handleAnnotate = async ({ x, y, content, page, element_info }) => {
+  const handleAnnotate = async ({ x, y, content, page, element_info, type, scope }) => {
     try {
       const ann = await api.createAnnotation(id, {
         x, y,
         page: page || 'index.html',
         author: 'Reviewer',
         content,
+        type: type || '字段说明',
+        scope: scope || `page:${page || 'index.html'}`,
         element_info
       });
       setAnnotations([...annotations, ann]);

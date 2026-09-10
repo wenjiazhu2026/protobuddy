@@ -925,6 +925,205 @@ button {
   flex-shrink: 0;
 }
 
+/* 注记类型（参考项目四类注记：字段说明/交互逻辑/业务规则/修改原型） */
+.annotation-type-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 5px;
+  vertical-align: middle;
+}
+.annotation-type-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px;
+  border: 1px solid;
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 18px;
+  white-space: nowrap;
+}
+.annotation-type-badge .annotation-type-dot {
+  margin-right: 0;
+  width: 7px;
+  height: 7px;
+}
+
+/* 批注草稿里的类型选择行 */
+.annotation-draft-type-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.annotation-draft-type-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.annotation-draft-type-select {
+  flex: 1;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  font-size: 12px;
+  color: var(--text);
+  cursor: pointer;
+}
+
+/* 激活批注的目标区域高亮轮廓 */
+.annotation-active-hl {
+  position: absolute;
+  z-index: 10;
+  pointer-events: none;
+  box-sizing: border-box;
+  border: 2px solid var(--orange);
+  background: rgba(249, 115, 22, 0.10);
+  border-radius: 3px;
+  animation: annotation-hl-fade 1.6s ease-out infinite;
+}
+@keyframes annotation-hl-fade {
+  0% { box-shadow: 0 0 0 0 rgba(249, 115, 22, 0.5); }
+  100% { box-shadow: 0 0 0 4px rgba(249, 115, 22, 0); }
+}
+
+/* 批注模式下悬停目标元素的提示 */
+/* 批注模式下悬停目标元素的提示 */
+.annotation-hover-hint {
+  position: absolute;
+  bottom: 12px;
+  left: 12px;
+  z-index: 12;
+  pointer-events: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 60%;
+  padding: 5px 10px;
+  background: rgba(24, 24, 27, 0.82);
+  color: #fff;
+  border-radius: 6px;
+  font-size: 12px;
+}
+.annotation-hover-hint b {
+  font-weight: 600;
+  color: #fdba74;
+  color: #fdba74;
+  white-space: nowrap;
+}
+.annotation-hover-hint em {
+  font-style: normal;
+  color: rgba(255, 255, 255, 0.75);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- 作用域模型 / 质量门禁 / 锚点开关 ---- */
+/* 列表里的作用域徽章（页面级 / 弹窗 · x / 抽屉 · x） */
+.annotation-scope-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-muted, #f4f4f5);
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+/* 草稿卡里的质量门禁提示（fail=红, warn=黄） */
+.annotation-draft-warn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 8px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.annotation-draft-warn span {
+  flex-shrink: 0;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 999px;
+  color: #fff;
+  font-size: 11px;
+}
+.annotation-draft-warn.fail {
+  background: rgba(220, 38, 38, 0.08);
+  border: 1px solid rgba(220, 38, 38, 0.35);
+  color: #b91c1c;
+}
+.annotation-draft-warn.fail span { background: #dc2626; }
+.annotation-draft-warn.warn {
+  background: rgba(217, 119, 6, 0.10);
+  border: 1px solid rgba(217, 119, 6, 0.4);
+  color: #b45309;
+}
+.annotation-draft-warn.warn span { background: #d97706; }
+
+/* 草稿卡的锚定反馈 */
+.annotation-draft-anchor {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 8px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: rgba(37, 99, 235, 0.07);
+  border: 1px solid rgba(37, 99, 235, 0.25);
+  color: #1d4ed8;
+  font-size: 12px;
+}
+.annotation-draft-anchor-probe {
+  color: var(--text-muted);
+  background: transparent;
+  border-color: var(--border);
+}
+.annotation-mag-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #2563eb;
+  flex-shrink: 0;
+}
+
+/* 锚点图层开关（预览右上角，不遮挡业务元素） */
+.preview-pin-toggle {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 15;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+.preview-pin-toggle:hover {
+  color: var(--primary);
+  border-color: var(--primary);
+}
+.preview-pin-toggle svg {
+  color: var(--orange);
+}
+
 .review-main {
   height: 100%;
   max-width: none;

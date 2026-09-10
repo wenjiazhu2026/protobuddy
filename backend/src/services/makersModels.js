@@ -128,7 +128,7 @@ export async function generatePlanWithMakers(apiKey, annotations, files, model =
         const snippet = (ele.text || '').slice(0, 80).replace(/\s+/g, ' ');
         elementLine = `\n    Target element: ${tag}${snippet}</${ele.tagName}> (path: ${ele.path || ''}, isHeading: ${!!ele.isHeading}, fontSize: ${ele.fontSize || 'unknown'})`;
       }
-      return `[Annotation ID: ${a.id}] (序号 ${i + 1}) Page: ${a.page || 'index.html'}, Position: (${a.x}%, ${a.y}%), Comment: "${a.content}"${elementLine}`;
+      return `[Annotation ID: ${a.id}] (序号 ${i + 1}) Page: ${a.page || 'index.html'}, Position: (${a.x}%, ${a.y}%), Type: ${a.type || '未标注类型'}, Scope: ${a.scope || `page:${a.page || 'index.html'}`} (page=页面级, modal/drawer=弹窗/抽屉内), Comment: "${a.content}"${elementLine}`;
     }).join('\n');
 
     // Build file context. Large files (e.g. 260KB generator scripts) cannot be

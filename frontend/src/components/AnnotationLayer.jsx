@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { ANNOTATION_TYPES, typeMeta } from '../annotationType.js';
 
 const STATUS_META = {
   open:     { label: '待处理', badge: 'badge-orange', pinClass: '',     order: 0 },
@@ -11,6 +12,12 @@ const FILTERS = [
   { key: 'open',     label: '待处理' },
   { key: 'resolved', label: '已解决' },
   { key: 'rejected', label: '不采纳' }
+];
+
+// 按注记类型筛选（参考项目四类注记）
+const TYPE_FILTERS = [
+  { key: 'all', label: '全部类型' },
+  ...ANNOTATION_TYPES.map(t => ({ key: t, label: t }))
 ];
 
 const SORTS = [
@@ -58,6 +65,8 @@ function exportAsJson(annotations, meta) {
     total: annotations.length,
     annotations: annotations.map(a => ({
       id: a.id,
+      type: a.type || null,
+      scope: a.scope || `page:${a.page || 'index.html'}`,
       content: a.content,
       status: a.status,
       author: a.author,
@@ -76,9 +85,11 @@ function exportAsJson(annotations, meta) {
 }
 
 function exportAsCsv(annotations, meta) {
-  const headers = ['id', 'content', 'status', 'author', 'page', 'x', 'y', 'created_at', 'element_info'];
+  const headers = ['id', 'type', 'scope', 'content', 'status', 'author', 'page', 'x', 'y', 'created_at', 'element_info'];
   const rows = annotations.map(a => [
     a.id,
+    a.type || '',
+    a.scope || `page:${a.page || 'index.html'}`,
     a.content,
     a.status,
     a.author,
@@ -119,6 +130,7 @@ export default function AnnotationLayer({
   onToggle
 }) {
   const [filter, setFilter] = useState('all');
+  const [typeFilter, setTypeFilter] = useState('all');
   const [sort, setSort] = useState('default');
   const [exportFormat, setExportFormat] = useState('json');
 
@@ -129,8 +141,9 @@ export default function AnnotationLayer({
 
   const filtered = useMemo(() => {
     let list = annotations.filter(a => {
-      if (filter === 'all') return true;
-      return a.status === filter;
+      if (filter !== 'all' && a.status !== filter) return false;
+      if (typeFilter !== 'all' && a.type !== typeFilter) return false;
+      return true;
     });
     list = [...list];
     if (sort === 'created_desc') {
@@ -146,7 +159,7 @@ export default function AnnotationLayer({
       });
     }
     return list;
-  }, [annotations, filter, sort]);
+  }, [annotations, filter, typeFilter, sort]);
 
   const handleExport = () => {
     const meta = { projectName, filter, sort };
@@ -229,6 +242,22 @@ export default function AnnotationLayer({
         })}
       </div>
 
+      {/* 注记类型筛选 */}
+      <div className="annotation-filters annotation-filters-type">
+        {TYPE_FILTERS.map(f => (
+          <button
+            key={f.key}
+            className={`btn btn-sm ${typeFilter === f.key ? 'btn-primary' : 'btn-secondary'}`}
+            onClick={() => setTypeFilter(f.key)}
+          >
+            {f.key !== 'all' && (
+              <span className="annotation-type-dot" style={{ background: typeMeta(f.key).color }} />
+            )}
+            {f.label}
+          </button>
+        ))}
+      </div>
+
       {/* Sort selector */}
       <div className="annotation-sort">
         <label htmlFor="annotation-sort">排序</label>
@@ -267,6 +296,22 @@ export default function AnnotationLayer({
                     <span>{idx + 1}</span>
                   </div>
                   <span className={`badge ${meta.badge}`}>{meta.label}</span>
+                  {ann.type && (
+                    <span
+                      className="annotation-type-badge"
+                      style={{ color: typeMeta(ann.type).color, borderColor: typeMeta(ann.type).color }}
+                    >
+                      <span className="annotation-type-dot" style={{ background: typeMeta(ann.type).color }} />
+                      {typeMeta(ann.type).label}
+                    </span>
+                  )}
+                  <span className="annotation-scope-badge" title={ann.scope || '页面级'}>
+                    {ann.scope?.startsWith('modal:')
+                      ? `弹窗 · ${ann.scope.slice(6)}`
+                      : ann.scope?.startsWith('drawer:')
+                        ? `抽屉 · ${ann.scope.slice(7)}`
+                        : '页面级'}
+                  </span>
                 </div>
                 <div className="annotation-item-content">{ann.content}</div>
                 <div className="annotation-item-meta">
