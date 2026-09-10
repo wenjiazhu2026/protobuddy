@@ -40,6 +40,7 @@ export default function Dashboard() {
   const { showToast } = useToast();
   const [editing, setEditing] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
 
   const [manualUrl, setManualUrl] = useState('');
   const [showManualUrl, setShowManualUrl] = useState(false);
@@ -329,6 +330,13 @@ export default function Dashboard() {
     });
   }, [files]);
 
+  // File-name filter (case-insensitive substring match on the full path).
+  const visibleFiles = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return sortedFiles;
+    return sortedFiles.filter(f => String(f.path || '').toLowerCase().includes(q));
+  }, [sortedFiles, searchQuery]);
+
   if (loading) {
     return <div className="main-content"><div className="loading-container"><div className="spinner" /><span>加载中...</span></div></div>;
   }
@@ -498,7 +506,7 @@ export default function Dashboard() {
       <div className="dashboard-layout">
         <div className="file-tree">
           <div className="file-tree-header">
-            <span>文件列表 ({files.length})</span>
+            <span>{searchQuery.trim() ? `匹配 ${visibleFiles.length}/${files.length}` : `文件列表 (${files.length})`}</span>
             {files.length > 0 && (
               <button
                 className="btn btn-sm btn-secondary file-export-btn"
@@ -510,10 +518,34 @@ export default function Dashboard() {
               </button>
             )}
           </div>
+          {files.length > 0 && (
+            <div className="file-search">
+              <input
+                type="text"
+                className="file-search-input"
+                placeholder="搜索文件名…"
+                value={searchQuery}
+                onChange={e => setSearchQuery(e.target.value)}
+                aria-label="搜索文件名"
+              />
+              {searchQuery && (
+                <button
+                  className="file-search-clear"
+                  onClick={() => setSearchQuery('')}
+                  title="清空搜索"
+                  aria-label="清空搜索"
+                >
+                  ×
+                </button>
+              )}
+            </div>
+          )}
           {files.length === 0 ? (
             <div style={{ padding: 16, fontSize: 12, color: 'var(--text-muted)' }}>暂无文件，请上传原型（ZIP 包 / 文件夹 / index.html）</div>
+          ) : visibleFiles.length === 0 ? (
+            <div style={{ padding: 16, fontSize: 12, color: 'var(--text-muted)' }}>无匹配「{searchQuery.trim()}」的文件</div>
           ) : (
-            sortedFiles.map(f => (
+            visibleFiles.map(f => (
               <div
                 key={f.id}
                 className={`file-tree-item ${selectedFile?.id === f.id ? 'active' : ''}`}
