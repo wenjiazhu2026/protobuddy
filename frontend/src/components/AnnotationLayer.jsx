@@ -120,6 +120,7 @@ export default function AnnotationLayer({
   onReject,
   onReopen,
   onDelete,
+  onEdit,
   onGeneratePlan,
   activeId,
   onActive,
@@ -133,6 +134,8 @@ export default function AnnotationLayer({
   const [typeFilter, setTypeFilter] = useState('all');
   const [sort, setSort] = useState('default');
   const [exportFormat, setExportFormat] = useState('json');
+  // 行内编辑态：editing = { id, content, type }；保存走 onEdit（owner 鉴权）。
+  const [editing, setEditing] = useState(null);
 
   const countBy = (s) => annotations.filter(a => a.status === s).length;
   const openCount = countBy('open');
@@ -168,6 +171,20 @@ export default function AnnotationLayer({
     } else {
       exportAsJson(filtered, meta);
     }
+  };
+
+  const beginEdit = (ann) => {
+    setEditing({ id: ann.id, content: ann.content || '', type: ann.type || '字段说明' });
+  };
+
+  const saveEdit = async (ann) => {
+    if (!editing || !editing.content.trim()) return;
+    const patch = {
+      content: editing.content.trim(),
+      type: ANNOTATION_TYPES.includes(editing.type) ? editing.type : ann.type
+    };
+    const ok = await onEdit?.(ann, patch);
+    if (ok) setEditing(null);
   };
 
   if (!isOpen) {
@@ -313,7 +330,50 @@ export default function AnnotationLayer({
                         : '页面级'}
                   </span>
                 </div>
-                <div className="annotation-item-content">{ann.content}</div>
+                <div className="annotation-item-content">
+                  {editing?.id === ann.id ? (
+                    <div className="annotation-edit-form annotation-edit-form-inline" onClick={(e) => e.stopPropagation()}>
+                      <select
+                        className="annotation-edit-type"
+                        value={editing.type}
+                        onChange={(e) => setEditing(ed => ({ ...ed, type: e.target.value }))}
+                        aria-label="批注类型"
+                      >
+                        {ANNOTATION_TYPES.map(t => (
+                          <option key={t} value={t}>{t}</option>
+                        ))}
+                      </select>
+                      <textarea
+                        className="annotation-edit-textarea"
+                        value={editing.content}
+                        rows={2}
+                        onChange={(e) => setEditing(ed => ({ ...ed, content: e.target.value }))}
+                        placeholder="请输入批注内容..."
+                      />
+                      <div className="annotation-edit-actions">
+                        <button className="btn btn-sm btn-secondary" onClick={() => setEditing(null)}>
+                          取消
+                        </button>
+                        <button
+                          className="btn btn-sm btn-primary"
+                          onClick={() => saveEdit(ann)}
+                          disabled={!editing.content.trim()}
+                        >
+                          保存
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      {ann.content}
+                      {ann.updated_at && ann.updated_at !== ann.created_at && (
+                        <span className="annotation-item-modified" title={`修改于 ${new Date(ann.updated_at).toLocaleString('zh-CN')}`}>
+                          ✎ 已修改
+                        </span>
+                      )}
+                    </>
+                  )}
+                </div>
                 <div className="annotation-item-meta">
                   {ann.author} · 位置 ({ann.x}%, {ann.y}%) · {new Date(ann.created_at).toLocaleString('zh-CN')}
                 </div>
@@ -344,6 +404,11 @@ export default function AnnotationLayer({
                   {(ann.status === 'resolved' || ann.status === 'rejected') && (
                     <button className="btn btn-sm btn-secondary" onClick={(e) => { e.stopPropagation(); onReopen?.(ann.id); }}>
                       重新打开
+                    </button>
+                  )}
+                  {editing?.id !== ann.id && (
+                    <button className="btn btn-sm btn-secondary" onClick={(e) => { e.stopPropagation(); beginEdit(ann); }}>
+                      ✎ 修改
                     </button>
                   )}
                   <button className="btn btn-sm btn-secondary" onClick={(e) => { e.stopPropagation(); onDelete?.(ann.id); }} style={{ color: 'var(--red)' }}>

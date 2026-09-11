@@ -3,6 +3,7 @@ import { useParams, useNavigate, Link } from 'react-router-dom';
 import { api, getOwnerToken } from '../api.js';
 import PreviewFrame from '../components/PreviewFrame.jsx';
 import AnnotationLayer from '../components/AnnotationLayer.jsx';
+import AnnotationDetailPanel from '../components/AnnotationDetailPanel.jsx';
 import { useToast } from '../components/ToastContext.jsx';
 import { useOwnerAuth } from '../components/OwnerAuthContext.jsx';
 
@@ -39,6 +40,99 @@ export default function Review() {
   const [panelOpen, setPanelOpen] = useState(() => {
     try { return localStorage.getItem('protobuddy.review.panel.open') !== 'false'; } catch { return true; }
   });
+
+  // ── 视图布局模式：standard（预览 + 右栏批注列表）↔ tri（三栏审阅：左列表 + 中画布 + 右详情）。
+  // 两种模式复用同一个 keyed PreviewFrame 实例，切换只移动 DOM 不重建 iframe，
+  // 因此当前子页面、锚点定位与可视化编辑会话在来回切换时都不会丢。
+  const [viewMode, setViewMode] = useState(() => {
+    try { return localStorage.getItem('protobuddy.review.viewMode') === 'tri' ? 'tri' : 'standard'; } catch { return 'standard'; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem('protobuddy.review.viewMode', viewMode); } catch {}
+  }, [viewMode]);
+
+  // 三栏审阅的左右栏宽度与收起状态，按项目（镜像参考项目按 prototypeId 记忆的规则）
+  // 持久化到 localStorage；恢复时做夹紧，避免窗口变化导致拖出视口。
+  const triPrefsKey = `protobuddy.review.tri.${id}`;
+  const [triPrefs, setTriPrefs] = useState(() => {
+    try {
+      const p = JSON.parse(localStorage.getItem(triPrefsKey) || '{}');
+      return {
+        leftOpen: p.leftOpen !== false,
+        leftW: Math.min(560, Math.max(220, Number(p.leftW) || 320)),
+        rightOpen: p.rightOpen !== false,
+        rightW: Math.min(560, Math.max(240, Number(p.rightW) || 340))
+      };
+    } catch {
+      return { leftOpen: true, leftW: 420, rightOpen: true, rightW: 340 };
+    }
+  });
+  useEffect(() => {
+    try { localStorage.setItem(triPrefsKey, JSON.stringify(triPrefs)); } catch {}
+  }, [triPrefs, triPrefsKey]);
+
+  // 三栏分隔线拖拽调宽（左栏/右栏各一根）。
+  const triGripRef = useRef(null);
+  const startTriDrag = useCallback((side) => (e) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = side === 'left' ? triPrefs.leftW : triPrefs.rightW;
+    triGripRef.current = { side, startX, startW };
+    const onMove = (ev) => {
+      const d = triGripRef.current;
+      if (!d) return;
+      const delta = ev.clientX - d.startX;
+      const next = d.startW + (side === 'left' ? delta : -delta);
+      if (side === 'left') {
+        setTriPrefs(p => ({ ...p, leftOpen: true, leftW: Math.min(560, Math.max(220, next)) }));
+      } else {
+        setTriPrefs(p => ({ ...p, rightOpen: true, rightW: Math.min(560, Math.max(240, next)) }));
+      }
+    };
+    const onUp = () => {
+      triGripRef.current = null;
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  }, [triPrefs.leftW, triPrefs.rightW]);
+
+  // ── 原型页面全屏视图 ──
+  // 优先原生 Fullscreen API（覆盖浏览器窗口，最“全屏”）；不支持或被拒绝时退化为
+  // CSS 固定覆盖层（占满视口、隐藏应用外壳，只保留原型画布）。两种方式都复用
+  // 同一个 keyed 预览容器节点，绝不重建 iframe，避免丢失当前页面/编辑状态。
+  const previewBoxRef = useRef(null);
+  const [fullscreen, setFullscreen] = useState(false);
+  const toggleFullscreen = useCallback(() => {
+    if (fullscreen || (document.fullscreenElement && previewBoxRef.current === document.fullscreenElement)) {
+      try { if (document.fullscreenElement) document.exitFullscreen(); } catch (_) {}
+      setFullscreen(false);
+      return;
+    }
+    const box = previewBoxRef.current;
+    if (box && typeof box.requestFullscreen === 'function') {
+      try {
+        box.requestFullscreen().then(() => {}).catch(() => setFullscreen(true));
+      } catch (_) {
+        setFullscreen(true);
+      }
+    } else {
+      setFullscreen(true);
+    }
+  }, [fullscreen]);
+  useEffect(() => {
+    const onFs = () => setFullscreen(!!document.fullscreenElement);
+    document.addEventListener('fullscreenchange', onFs);
+    return () => document.removeEventListener('fullscreenchange', onFs);
+  }, []);
+  // CSS 兜底全屏时支持 Esc 退出（原生全屏 Esc 由浏览器处理）。
+  useEffect(() => {
+    if (!fullscreen || document.fullscreenElement) return;
+    const onKey = (e) => { if (e.key === 'Escape') setFullscreen(false); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [fullscreen]);
 
   // Editor ready/exit reports from the iframe (stable identity so the preview
   // message listener is not re-registered on every render).
@@ -150,6 +244,19 @@ export default function Review() {
     }
   };
 
+  // 修改批注（内容 / 类型）。写操作与删除/解决一致，走 owner 权限守卫。
+  const handleEditAnnotation = async (ann, patch) => {
+    try {
+      const updated = await guard(id, () => api.updateAnnotation(id, ann.id, patch, getOwnerToken(id)));
+      setAnnotations(prev => prev.map(a => a.id === ann.id ? { ...a, ...patch, updated_at: updated?.updated_at } : a));
+      showToast('批注已修改');
+      return true;
+    } catch (err) {
+      showToast('修改失败: ' + err.message, 'error');
+      return false;
+    }
+  };
+
   /**
    * Visual-edit save: the iframe editor serializes a page back to HTML and
    * posts it here. Writing files is owner-gated (like upload/deploy), so the
@@ -210,6 +317,27 @@ export default function Review() {
     }
   };
 
+  // 批注列表面板（standard 右栏 / 三栏左栏共用同一份渲染，避免两份重复代码）。
+  // isOpen 由所在栏位控制；收起时 AnnotationLayer 自带 44px 窄栏模板。
+  const renderAnnotationList = (open, onToggle) => (
+    <AnnotationLayer
+      annotations={annotations}
+      onResolve={handleResolve}
+      onReject={handleReject}
+      onReopen={handleReopen}
+      onDelete={handleDelete}
+      onEdit={handleEditAnnotation}
+      onGeneratePlan={handleGeneratePlan}
+      activeId={activeAnnotationId}
+      onActive={(ann) => setActiveAnnotationId(ann.id === activeAnnotationId ? null : ann.id)}
+      onPageTagClick={(page) => previewRef.current?.navigateTo(page)}
+      generating={generating}
+      projectName={project.name}
+      isOpen={open}
+      onToggle={() => onToggle(!open)}
+    />
+  );
+
   if (loading) {
     return <div className="main-content"><div className="loading-container"><div className="spinner" /><span>加载中...</span></div></div>;
   }
@@ -221,7 +349,7 @@ export default function Review() {
   const hasPreview = project.current_url || project.status === 'uploaded' || project.status === 'deployed';
 
   return (
-    <div className="main-content review-main" style={{ paddingTop: 8, display: 'flex', flexDirection: 'column', height: '100%' }}>
+    <div className={`main-content review-main ${fullscreen ? 'screen-fullscreen' : ''}`} style={{ paddingTop: 8, display: 'flex', flexDirection: 'column', height: '100%' }}>
       {/* Header */}
       <div className="page-header" style={{ flexShrink: 0 }}>
         <div>
@@ -270,15 +398,36 @@ export default function Review() {
         </div>
       </div>
 
-      {/* Review layout */}
+      {/* Review layout：同一 keyed 容器承载两种模式（standard / tri），共享同一个
+          preview-container 节点，切换只重新排列不重建 iframe，当前子页面、锚点
+          定位与可视化编辑会话不会随模式切换丢失。 */}
       <div
-        className="review-layout"
+        key="review-layout"
+        className={`review-layout ${viewMode === 'tri' ? 'tri-active' : ''}`}
         style={{
           '--review-cols': panelOpen ? '1fr 300px' : '1fr 44px',
         }}
       >
-        {/* Preview with annotation overlay */}
-        <div className="preview-container">
+        {/* 左栏（仅三栏审阅模式）：批注列表，可收起/拖宽 */}
+        {viewMode === 'tri' && (
+          <div
+            key="tri-left"
+            className="tri-rail tri-rail-left"
+            style={{ width: triPrefs.leftOpen ? triPrefs.leftW : 44 }}
+          >
+            {renderAnnotationList(triPrefs.leftOpen, (open) => setTriPrefs(p => ({ ...p, leftOpen: open })))}
+          </div>
+        )}
+        {viewMode === 'tri' && (
+          <div key="tri-grip-left" className="tri-grip" onPointerDown={startTriDrag('left')} title="拖拽调整列表宽度" aria-hidden="true" />
+        )}
+
+        {/* 中栏：原型预览（两种模式共用同一 keyed 节点；全屏时它独占视口） */}
+        <div
+          key="preview-pane"
+          ref={previewBoxRef}
+          className="preview-container"
+        >
           <div className="preview-toolbar">
             <span style={{ fontWeight: 500, fontSize: 13 }}>原型预览</span>
             <span className="badge badge-blue" title="评审预览固定从平台存储读取（编辑、保存也写平台存储），与 EdgeOne 线上版本无关；线上版本仅在点击重新部署后更新">
@@ -347,6 +496,46 @@ export default function Review() {
                 批注模式 · 点击任意位置
               </span>
             )}
+            {/* 视图模式切换：常规评审 / 三栏审阅（对应参考项目的浮动/三栏同级分段控件） */}
+            <div className="review-mode-switch" role="group" aria-label="评审视图">
+              <button
+                type="button"
+                className={viewMode === 'standard' ? 'active' : ''}
+                onClick={() => setViewMode('standard')}
+                title="常规评审：左侧原型 + 右侧批注列表"
+              >
+                常规评审
+              </button>
+              <button
+                type="button"
+                className={viewMode === 'tri' ? 'active' : ''}
+                onClick={() => setViewMode('tri')}
+                title="三栏审阅：左侧批注列表 + 中间原型画布 + 右侧批注详情（左右栏可拖宽/收起）"
+              >
+                三栏审阅
+              </button>
+            </div>
+
+            {/* 原型页面全屏视图：整页铺满原型画布，隐藏评审侧栏；再点或 Esc 退出 */}
+            <button
+              type="button"
+              className={`btn btn-sm btn-secondary preview-fullscreen-btn ${fullscreen ? 'active' : ''}`}
+              onClick={toggleFullscreen}
+              title={fullscreen ? '退出全屏（Esc）' : '全屏预览原型，隐藏评审侧栏'}
+              aria-pressed={fullscreen}
+            >
+              {fullscreen ? (
+                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3" />
+                </svg>
+              ) : (
+                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3" />
+                </svg>
+              )}
+              <span>{fullscreen ? '退出全屏' : '全屏预览'}</span>
+            </button>
+
             {/* 锚点图层开关：悬浮在原型画面上会遮挡内容，改为工具栏最右侧的常驻按钮 */}
             <button
               type="button"
@@ -390,22 +579,34 @@ export default function Review() {
           )}
         </div>
 
-        {/* Annotation panel */}
-        <AnnotationLayer
-          annotations={annotations}
-          onResolve={handleResolve}
-          onReject={handleReject}
-          onReopen={handleReopen}
-          onDelete={handleDelete}
-          onGeneratePlan={handleGeneratePlan}
-          activeId={activeAnnotationId}
-          onActive={(ann) => setActiveAnnotationId(ann.id === activeAnnotationId ? null : ann.id)}
-          onPageTagClick={(page) => previewRef.current?.navigateTo(page)}
-          generating={generating}
-          projectName={project.name}
-          isOpen={panelOpen}
-          onToggle={() => setPanelOpen(o => !o)}
-        />
+        {/* 右栏：standard 模式渲染右侧批注列表；三栏模式渲染右侧批注详情。
+            两个 branch 各自 keyed，切换时不碰撞 preview-container 节点。 */}
+        {viewMode === 'tri' && (
+          <div key="tri-grip-right" className="tri-grip" onPointerDown={startTriDrag('right')} title="拖拽调整详情宽度" aria-hidden="true" />
+        )}
+        {viewMode === 'tri' ? (
+          <div
+            key="tri-right"
+            className="tri-rail tri-rail-right"
+            style={{ width: triPrefs.rightOpen ? triPrefs.rightW : 44 }}
+          >
+            <AnnotationDetailPanel
+              annotation={annotations.find(a => a.id === activeAnnotationId) || null}
+              onEdit={handleEditAnnotation}
+              onResolve={handleResolve}
+              onReject={handleReject}
+              onReopen={handleReopen}
+              onDelete={handleDelete}
+              onNavigatePage={(page) => previewRef.current?.navigateTo(page)}
+              collapsed={!triPrefs.rightOpen}
+              onToggleCollapse={(open) => setTriPrefs(p => ({ ...p, rightOpen: open }))}
+            />
+          </div>
+        ) : (
+          <div key="list-pane" className="list-pane">
+            {renderAnnotationList(panelOpen, (open) => setPanelOpen(open))}
+          </div>
+        )}
       </div>
 
       {generating && (

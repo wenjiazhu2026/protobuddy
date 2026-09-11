@@ -1727,3 +1727,346 @@ button {
   }
   .spinner { animation-duration: 0.6s !important; }
 }
+
+/* ===================== 评审界面增强：批注修改 / 三栏审阅 / 全屏预览 ===================== */
+
+/* ── 视图模式切换分段控件（预览工具栏右端，常规评审 / 三栏审阅） ── */
+.review-mode-switch {
+  display: inline-flex;
+  margin-left: auto;
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--bg);
+}
+.review-mode-switch button {
+  padding: 3px 12px;
+  font-size: 12px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 0.15s, color 0.15s;
+}
+.review-mode-switch button + button { border-left: 1px solid var(--border); }
+.review-mode-switch button:hover { background: var(--bg-hover); color: var(--text); }
+.review-mode-switch button.active {
+  background: var(--primary);
+  color: #fff;
+}
+.review-mode-switch:focus-within { outline: 2px solid var(--primary-light); outline-offset: 1px; }
+
+/* 全屏预览按钮：位于模式切换右侧；active=正在全屏 */
+.preview-fullscreen-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.preview-fullscreen-btn.active {
+  color: var(--primary);
+  border-color: var(--primary);
+  background: var(--primary-light);
+}
+/* 锚点开关原先用 margin-left:auto 顶到最右，现由模式切换接管最右定位 */
+.preview-pin-toggle { margin-left: 0; }
+
+/* 工具栏更窄时允许换行，避免按钮挤压 */
+.preview-toolbar {
+  flex-wrap: wrap;
+  row-gap: 8px;
+}
+
+/* ── 三栏审阅布局 ── */
+/* 同一 .review-layout 容器承载两种模式：standard=grid(1fr 面板)，tri=flex(左/中/右)。
+   两种模式共用同一个 keyed preview-container 节点，iframe 与编辑会话不重建。 */
+.review-layout.tri-active {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+}
+.review-layout.tri-active > .preview-container {
+  flex: 1;
+  min-width: 0;
+}
+.tri-rail {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.tri-rail > .annotation-panel,
+.tri-rail > .annotation-detail {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+}
+/* 分隔抓柄：拖拽调宽（左栏/右栏）,窄细条悬停时高亮 */
+.tri-grip {
+  flex: 0 0 8px;
+  cursor: col-resize;
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  position: relative;
+  z-index: 5;
+}
+.tri-grip::after {
+  content: '';
+  width: 3px;
+  margin: 8px 0;
+  border-radius: 2px;
+  background: var(--gray-200);
+  transition: background var(--dur-fast) var(--ease-out);
+}
+.tri-grip:hover::after,
+.tri-grip:active::after {
+  background: var(--gray-400);
+}
+.tri-grip:active { cursor: col-resize; }
+
+/* standard 模式右侧批注列表的占位格子 */
+.list-pane {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+.list-pane > .annotation-panel {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+}
+
+/* ── 批注修改（列表行内编辑表单） ── */
+.annotation-edit-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.annotation-edit-form-inline {
+  padding: 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.annotation-edit-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+.annotation-edit-type {
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  font-size: 12px;
+  color: var(--text);
+  cursor: pointer;
+}
+.annotation-edit-textarea {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  resize: vertical;
+  color: var(--text);
+  outline: none;
+  box-sizing: border-box;
+}
+.annotation-edit-textarea:focus {
+  border-color: var(--primary);
+  box-shadow: var(--focus-ring);
+}
+.annotation-edit-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.annotation-item-modified {
+  display: inline-block;
+  margin-left: 6px;
+  font-size: 11px;
+  color: var(--text-muted);
+  vertical-align: middle;
+}
+
+/* ── 批注详情栏（三栏审阅右栏） ── */
+.annotation-detail {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.annotation-detail-header {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.annotation-detail-toggle {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-card);
+  color: var(--text-light);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.annotation-detail-toggle:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+  border-color: var(--text-light);
+}
+.annotation-detail-toggle svg { width: 16px; height: 16px; }
+.annotation-detail-body {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+  padding: 12px 16px;
+}
+.annotation-detail-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.annotation-detail-content {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  padding: 10px 12px;
+}
+.annotation-detail-text {
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text);
+}
+.annotation-detail-modified {
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.annotation-detail-meta {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text);
+}
+.annotation-detail-meta > div {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+.annotation-detail-meta-label {
+  display: inline-block;
+  min-width: 44px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+.annotation-detail-jump {
+  margin-left: 8px;
+  font-size: 11px;
+  color: var(--primary);
+  background: var(--primary-light);
+  border: none;
+  border-radius: 10px;
+  padding: 1px 8px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.annotation-detail-jump:hover { background: var(--gray-200); }
+.annotation-detail-actions {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.annotation-detail-collapsed {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 8px 0;
+  gap: 12px;
+  overflow: hidden;
+  cursor: default;
+  user-select: none;
+}
+.annotation-detail-collapsed-title {
+  writing-mode: vertical-rl;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-light);
+  letter-spacing: 2px;
+}
+.annotation-detail-collapsed-counts {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+/* ── 原型页面全屏视图 ──
+   原生 Fullscreen API 不可用时的 CSS 覆盖模式：整页铺满原型画布，
+   隐藏页面头、项目导航与评审侧栏。原生全屏时浏览器自身隐藏外壳，本规则
+   再兜一层（同一容器节点，不重建 iframe）。 */
+.review-main.screen-fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 12000;
+  height: 100% !important;
+  max-width: none;
+  margin: 0;
+  padding: 0 !important;
+  background: #0b0d10;
+  animation: none;
+  overflow: hidden;
+}
+.review-main.screen-fullscreen .page-header {
+  display: none;
+}
+.review-main.screen-fullscreen .review-layout {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.review-main.screen-fullscreen .review-layout > .list-pane,
+.review-main.screen-fullscreen .review-layout > .tri-rail,
+.review-main.screen-fullscreen .review-layout > .tri-grip {
+  display: none;
+}
+.review-main.screen-fullscreen .review-layout > .preview-container {
+  border: none;
+  border-radius: 0;
+  width: 100%;
+  height: 100%;
+}
+.review-main.screen-fullscreen .preview-toolbar {
+  background: var(--gray-900);
+  color: var(--gray-100);
+}
+.review-main.screen-fullscreen .page-switcher,
+.review-main.screen-fullscreen .page-switcher-label {
+  color: var(--gray-300);
+}
