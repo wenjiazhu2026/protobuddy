@@ -226,13 +226,17 @@ router.post('/:id/plan', async (req, res) => {
   }
   res.on('finish', () => planGenInFlight.delete(String(req.params.id)));
 
-  // Get open annotations
+  // Get the open annotations that need to change the prototype.
+  // 产品规则：只有类型为「修改原型」的批注才需要生成修改方案；字段说明/交互逻辑/
+  // 业务规则等仅用于评审与说明，不自动触发原型修改。未标注类型的旧批注同样排除。
   const annotations = await query('annotations', a =>
-    String(a.project_id) === String(req.params.id) && a.status === 'open'
+    String(a.project_id) === String(req.params.id)
+    && a.status === 'open'
+    && a.type === '修改原型'
   );
 
   if (annotations.length === 0) {
-    return res.status(400).json({ error: 'No open annotations to generate plan from' });
+    return res.status(400).json({ error: 'No open "修改原型" annotations to generate plan from' });
   }
 
   // ---- Duplicate-plan guard (idempotency) ---------------------------------

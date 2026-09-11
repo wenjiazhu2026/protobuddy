@@ -141,6 +141,8 @@ export default function AnnotationLayer({
   const openCount = countBy('open');
   const resolvedCount = countBy('resolved');
   const rejectedCount = countBy('rejected');
+  // 只有类型为「修改原型」的待处理批注参与方案生成（其他类型仅评审、不自动改原型）。
+  const openModifyCount = annotations.filter(a => a.status === 'open' && a.type === '修改原型').length;
 
   const filtered = useMemo(() => {
     let list = annotations.filter(a => {
@@ -207,12 +209,12 @@ export default function AnnotationLayer({
           {rejectedCount > 0 && <span className="badge badge-gray" title={`不采纳 ${rejectedCount}`}>{rejectedCount}</span>}
           {annotations.length === 0 && <span className="badge badge-gray">0</span>}
         </div>
-        {openCount > 0 && (
+        {openModifyCount > 0 && (
           <button
             className="annotation-panel-toggle-generate"
             onClick={() => onGeneratePlan?.()}
             disabled={generating}
-            title="生成修改方案"
+            title="仅类型「修改原型」的批注参与方案生成"
             aria-label="生成修改方案"
           >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -427,10 +429,16 @@ export default function AnnotationLayer({
           className="btn btn-primary"
           style={{ width: '100%', marginBottom: 8 }}
           onClick={onGeneratePlan}
-          disabled={generating || openCount === 0}
-          title={openCount === 0 ? '没有待处理批注' : '基于待处理批注生成修改方案'}
+          disabled={generating || openModifyCount === 0}
+          title={openModifyCount === 0
+            ? '没有类型为「修改原型」的待处理批注（其他类型不参与自动改原型）'
+            : `基于 ${openModifyCount} 条「修改原型」批注生成修改方案`}
         >
-          {generating ? '正在生成方案...' : `生成修改方案 (${openCount} 条待处理批注)`}
+          {generating
+            ? '正在生成方案...'
+            : openModifyCount > 0
+              ? `生成修改方案 (${openModifyCount} 条待修改原型)`
+              : '生成修改方案（需「修改原型」类型批注）'}
         </button>
 
         <div className="annotation-export">
