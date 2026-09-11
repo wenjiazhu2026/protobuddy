@@ -1,6 +1,12 @@
-name: Deploy to EdgeOne Makers
+name: Deploy to EdgeOne Makers (test env)
 
-# 推送到 main 即自动构建并部署到 EdgeOne Makers 的 production 环境。
+# 两套环境，别搞混：
+#   生产 protobuddy      —— EdgeOne Makers 的 Git 集成项目，push main 由 EdgeOne
+#                           自己的构建流水线自动部署 → https://protobuddy.20140107.xyz/
+#   测试 protobuddy-app  —— CLI 上传型项目（无法接入 Git 集成），由本工作流负责
+#                           → https://protobuddy-app.edgeone.cool/
+# 也就是说：一次 push 会同时更新两套环境——生产走 EdgeOne 的 Git 构建（本仓库
+# 里看不到它的运行记录，构建更慢），测试走下面这条 Actions 流水线（约 2 分钟）。
 # 手动兜底：Actions 页面点 "Run workflow"（workflow_dispatch）。
 on:
   push:
@@ -9,7 +15,7 @@ on:
 
 # 同一条流水线不并发：两次部署同时跑会让线上版本互相覆盖。
 concurrency:
-  group: edgeone-makers-production
+  group: edgeone-makers-test-protobuddy-app
   cancel-in-progress: false
 
 jobs:
@@ -33,9 +39,9 @@ jobs:
         env:
           EDGEONE_API_TOKEN: ${{ secrets.EDGEONE_API_TOKEN }}
 
-      # 部署到既有的 protobuddy-app 项目（direct upload 类型，只能由 CLI 更新）。
+      # 部署到测试项目 protobuddy-app（direct upload 类型，只能由 CLI 更新）。
       # -a global 必须与该项目的加速区域一致，否则会部署到另一个项目上。
-      - name: Deploy to EdgeOne Makers
+      - name: Deploy to test project (protobuddy-app)
         run: |
           npx --yes edgeone@latest makers deploy . \
             -n protobuddy-app \
