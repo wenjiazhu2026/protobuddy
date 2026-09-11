@@ -84,6 +84,12 @@ function PreviewFrame({ projectId, reloadNonce = 0, annotateMode, onAnnotate, an
   // Used to keep (re)sending the mode message until the iframe acknowledges,
   // so a toggle clicked while the preview is still booting is not silently lost.
   const editAckRef = useRef(false);
+  // 当前页面（同步镜像 currentPage）：iframe 内的脚本跳转时用来判断“这次跳转是
+  // 用户主动换页，还是原型自身的链接把编辑中的页面顶掉了”。
+  const pageRef = useRef('index.html');
+  // 本次编辑会话内已经拦截过的意外跳转次数。只拦一次，避免原型是「入口页自动
+  // 跳转」的形态时陷入来回横跳。
+  const blockedNavRef = useRef(0);
 
   const [iframeKey, setIframeKey] = useState(0);
   // Unique per component mount: React will recreate the <iframe> element (and
@@ -136,6 +142,8 @@ function PreviewFrame({ projectId, reloadNonce = 0, annotateMode, onAnnotate, an
     setScrollPos({ x: 0, y: 0 });
     setDocSize({ width: 1, height: 1 });
     setCurrentPage('index.html');
+    pageRef.current = 'index.html';
+    blockedNavRef.current = 0;
     setElementPositions({});
     setDraft(null);
     setDraftInput('');
@@ -183,6 +191,8 @@ function PreviewFrame({ projectId, reloadNonce = 0, annotateMode, onAnnotate, an
       return;
     }
     editAckRef.current = false;
+    // 每次进入编辑模式都重新给一次「阻止跳转」的兜底机会
+    blockedNavRef.current = 0;
     sendEditMode(0);
     const iv = setInterval(() => {
       if (editAckRef.current) {
@@ -301,6 +311,28 @@ function PreviewFrame({ projectId, reloadNonce = 0, annotateMode, onAnnotate, an
       scheduleElementQuery();
     } else if (d.__protoNav) {
       const page = pageFromPath(d.path);
+      // 编辑模式下原型自身的链接/脚本不许把 iframe 拽走：页面上的点击已被编辑器
+      // 守卫与注入的链接拦截器挡下，这里兜住其它路径（原型自定义的捕获监听、
+      // location.href 赋值等），把页面拉回正在编辑的这一页。只兜一次，避免入口页
+      // 自动跳转这类原型导致来回横跳。
+      if (editModeRef.current && editAckRef.current
+        && page !== pageRef.current && blockedNavRef.current < 1) {
+        blockedNavRef.current += 1;
+        const back = pageRef.current;
+        const encodedBack = back.split('/').map(encodeURIComponent).join('/');
+        const backSrc = back === 'index.html' ? previewUrl : `${previewUrl}${encodedBack}`;
+        console.warn('[ProtoBuddy] 编辑模式已阻止页面跳转：', page, '→ 回到', back);
+        // iframe 自行跳走后 src 属性仍是原值（属性不随文档跳转变化），因此不能靠
+        // 比较 src 判断，必须对 contentWindow 做一次 replace 把它拉回来。
+        try {
+          iframeRef.current?.contentWindow?.location.replace(backSrc);
+        } catch (_) {
+          if (iframeRef.current) iframeRef.current.src = backSrc;
+        }
+        sendEditMode(300);
+        return;
+      }
+      pageRef.current = page;
       setCurrentPage(page);
       // New page starts at scroll 0; discard stale offset and positions
       setScrollPos({ x: 0, y: 0 });
@@ -377,7 +409,7 @@ function PreviewFrame({ projectId, reloadNonce = 0, annotateMode, onAnnotate, an
         }
       } catch (_) {}
     }
-  }, [onPageChange, scheduleElementQuery, allowedOrigin, sendEditMode, handleEditorSave, onEditStateChange]);
+  }, [onPageChange, scheduleElementQuery, allowedOrigin, sendEditMode, handleEditorSave, onEditStateChange, previewUrl]);
 
   useEffect(() => {
     window.addEventListener('message', handleScrollMessage);
@@ -504,6 +536,7 @@ function PreviewFrame({ projectId, reloadNonce = 0, annotateMode, onAnnotate, an
         iframe.src = nextSrc;
         // Optimistically update currentPage; __protoNav will correct it once loaded.
         setCurrentPage(target);
+        pageRef.current = target;
         setScrollPos({ x: 0, y: 0 });
         setDocSize({ width: 1, height: 1 });
         setElementPositions({});

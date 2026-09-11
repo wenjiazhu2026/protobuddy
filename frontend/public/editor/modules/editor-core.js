@@ -6,6 +6,9 @@ window.HVE_Core = (function () {
   function enable() {
     if (isActive) return;
     isActive = true;
+    // 编辑态标志：原型 HTML 注入的链接拦截器（页面加载时注册，比本编辑器更早）
+    // 依赖它来判断「现在是编辑模式，点击只用于选中元素，不许跳转」。
+    window.__HVE_EDITING__ = true;
 
     // 启动各模块
     if (window.HVE_Selector) window.HVE_Selector.activate();
@@ -32,6 +35,7 @@ window.HVE_Core = (function () {
   function disable() {
     if (!isActive) return;
     isActive = false;
+    window.__HVE_EDITING__ = false;
 
     if (window.HVE_Selector) window.HVE_Selector.deactivate();
     if (window.HVE_DragMove) window.HVE_DragMove.deactivate();

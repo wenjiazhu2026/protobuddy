@@ -231,6 +231,11 @@ function injectScrollSyncScript(html) {
     // 3. link interception
     'function findA(t){for(var n=t;n&&n!==document;n=n.parentNode){if(n.tagName==="A")return n}return null}' +
     'document.addEventListener("click",function(e){' +
+    // 可视化编辑模式下点击只用于「选中元素」，任何跳转都必须让路：本拦截器在
+    // 页面加载时就注册，比懒加载的编辑器守卫更早执行，因此必须自己判断编辑态，
+    // 否则下面的 location.href 会直接把 iframe 拽走（守卫的 preventDefault 已经
+    // 来不及撤销一次已经发生的赋值）。
+    'if(window.__HVE_EDITING__)return;' +
     'var a=findA(e.target);if(!a)return;' +
     'var href=a.getAttribute("href");if(!href)return;' +
     'if(href.charAt(0)==="#")return;' +
@@ -244,7 +249,9 @@ function injectScrollSyncScript(html) {
     'if(abs.href!==location.href)location.href=abs.href' +
     '},true);' +
     // 4. override window.open so JS-driven same-origin popups stay inside the iframe
+    //    （编辑模式下直接吞掉：编辑时既不该跳转也不该弹新窗口）
     'var _wopen=window.open;window.open=function(url,target,features){' +
+    'if(window.__HVE_EDITING__)return null;' +
     'if(url){try{var u=new URL(url,location.href);if(u.origin===location.origin){var t=(target||"").toLowerCase();if(t==="_blank"||t===""){location.href=u.href;return window;}}}catch(_){}}' +
     'return _wopen.apply(this,arguments)};' +
     // 5. probe the DOM element under a viewport point (used by the annotation overlay)
@@ -301,6 +308,25 @@ function injectScrollSyncScript(html) {
     'function computeOverlayScope(){var cands=document.querySelectorAll("[id][data-modal],[id][data-drawer],[id][data-dialog],[role=dialog][id],[role=alertdialog][id],.modal-overlay[id],.drawer-overlay[id]");var top=null;for(var i=0;i<cands.length;i++){var n=cands[i];if(!isElVisible(n))continue;var z=0;try{z=parseInt(getComputedStyle(n).zIndex,10)||0}catch(e){}var cn="";try{cn=n.className&&typeof n.className==="string"?n.className:""}catch(e2){}var kind=/drawer|side|draw/i.test(cn)?"drawer":"modal";if(!top||z>top.z)top={id:n.id,kind:kind,z:z};}return top?top.kind+":"+top.id:null;}' +
     'var _ocv=null,_ocq=0;function emitOverlayScope(){var s=computeOverlayScope();if(s===_ocv)return;_ocv=s;try{window.parent.postMessage({__protoScopeState:1,scope:s},"*")}catch(e){}}' +
     'function overlayDebounced(){if(_ocq)clearTimeout(_ocq);_ocq=setTimeout(function(){_ocq=0;emitOverlayScope()},350);}' +
+    // --- 悬停高亮框（单例）---
+    // 必须定义在 message 监听器「外面」：批注模式的鼠标悬停按动画帧发消息，
+    // 若把 _hl 声明在监听器内部，每收到一条 __protoHighlight 都会新建一个橙色
+    // 覆盖层且无人回收，几秒后十几层叠加把整页铺成橙色，只能刷新页面恢复。
+    // 这里保证整份文档永远只有一个高亮节点，showHl/hideHl 操作的都是它。
+    'var _hl=null;' +
+    'function makeHl(){' +
+    'if(_hl&&_hl.parentNode)return _hl;' +
+    'var st=document.querySelectorAll("div[data-hve-hl]");' +
+    'for(var i=0;i<st.length;i++){if(st[i].parentNode)st[i].parentNode.removeChild(st[i]);}' +
+    'var e=document.createElement("div");e.setAttribute("data-hve-editor","true");e.setAttribute("data-hve-hl","1");' +
+    'e.style.cssText="position:absolute;z-index:2147483645;pointer-events:none;box-sizing:border-box;border-radius:3px;display:none;";' +
+    'document.documentElement.appendChild(e);_hl=e;return e;}' +
+    'function showHl(r,opts){var e=makeHl();var o=opts||{};' +
+    'e.style.left=(r.left+(window.scrollX||0))+"px";e.style.top=(r.top+(window.scrollY||0))+"px";' +
+    'e.style.width=r.width+"px";e.style.height=r.height+"px";' +
+    'e.style.border=o.border||"2px dashed #f97316";e.style.background=o.background||"rgba(249,115,22,0.12)";' +
+    'e.style.display="block";return e;}' +
+    'function hideHl(){if(_hl){_hl.style.display="none";}}' +
     'window.addEventListener("message",function(e){' +
     'var d=e.data;if(!d)return;' +
     'if(d.__protoScopeNow===1){var sn=null;try{sn=computeOverlayScope()}catch(e3){}window.parent.postMessage({__protoScopeState:1,scope:sn},"*");return;}' +
@@ -341,12 +367,21 @@ function injectScrollSyncScript(html) {
     //    悬停时在原型内用虚线框标出当前命中的元素，让批注作者看清锚点会落在
     //    哪个区域；点击后的 __protoProbe 探针命中的是同一元素。激活某条批注时
     //    用 __protoReveal 滚动并闪烁高亮其目标元素。
-    'var _hl=null;function makeHl(){if(_hl)return _hl;' +
-    'var e=document.createElement("div");e.setAttribute("data-hve-editor","true");e.style.cssText="position:absolute;z-index:2147483645;pointer-events:none;box-sizing:border-box;border-radius:3px;";document.documentElement.appendChild(e);_hl=e;return e;}' +
-    'function showHl(r,opts){var e=makeHl();var o=opts||{};e.style.left=(r.left+(window.scrollX||0))+"px";e.style.top=(r.top+(window.scrollY||0))+"px";e.style.width=r.width+"px";e.style.height=r.height+"px";e.style.border=o.border||"2px dashed #f97316";e.style.background=o.background||"rgba(249,115,22,0.12)";e.style.display="block";return e;}' +
-    'function hideHl(){if(_hl){_hl.style.display="none";}}' +
+    // 悬停高亮必须复用同一个 DOM 节点（见 makeHl 的单例说明）。它只在鼠标悬停
+    // 时短暂存在，绝不能落盘，故同样打上 data-hve-editor 由序列化器剔除。
     'if(d.__protoHighlight===1){var he=null;try{he=document.elementFromPoint(d.x,d.y);}catch(e){}try{' +
-    'if(he&&he.tagName!=="HTML"){var hr=he.getBoundingClientRect();showHl(hr,{});var hi=buildElementInfo(he,d.x,d.y);window.parent.postMessage({__protoHoverInfo:1,found:true,tag:hi.tagName,id:hi.elementId,text:hi.text},"*");}else{hideHl();window.parent.postMessage({__protoHoverInfo:1,found:false},"*");}}catch(e2){hideHl();window.parent.postMessage({__protoHoverInfo:1,found:false},"*");}return;}' +
+    'if(he&&he.tagName!=="HTML"&&he.tagName!=="BODY"&&!(he.getAttribute&&he.getAttribute("data-hve-editor"))){' +
+    'var hr=he.getBoundingClientRect();' +
+    // 页面级/整屏容器（main/section/article 或占满视口的大块）只画一圈虚线边界，
+    // 不铺底色：整页铺 12% 橙色会让人以为“页面变橙了”，反而看不清锚点落在哪。
+    'var wrapEl=/^(MAIN|SECTION|ARTICLE|HEADER|FOOTER|NAV|ASIDE)$/i.test(he.tagName);' +
+    'var bigBox=wrapEl||((hr.width*hr.height)>(window.innerWidth*window.innerHeight)*0.45);' +
+    'showHl(hr,bigBox?{border:"1px dashed #f97316",background:"rgba(249,115,22,0.04)"}:{});' +
+    // 悬停提示只需要一小段文字；大容器上取 innerText 会触发整页重排，这里只用
+    // 廉价的 textContent 并且不读容器文字，避免每个动画帧都卡一下。
+    'var htxt="";try{htxt=bigBox?"":(he.textContent||"").replace(/[\\s\\r\\n]+/g," ").trim().slice(0,120);}catch(e5){}' +
+    'window.parent.postMessage({__protoHoverInfo:1,found:true,tag:he.tagName,id:he.id||"",text:htxt},"*");' +
+    '}else{hideHl();window.parent.postMessage({__protoHoverInfo:1,found:false},"*");}}catch(e2){hideHl();window.parent.postMessage({__protoHoverInfo:1,found:false},"*");}return;}' +
     'if(d.__protoHoverClear===1){hideHl();return;}' +
     'if(d.__protoReveal===1){var rel=null;try{' +
     'if(!d.modalId&&d.scope)d.modalId=scopeFindId(d.scope);' +
@@ -413,7 +448,7 @@ function injectEditorBootstrap(html) {
   var MODULES = ["html-serializer.js","proto-file-manager.js","history.js","selector.js","drag-move.js","resize.js","text-edit.js","table-edit.js","image-handler.js","align-guide.js","zoom.js","toolbar.js","insert-panel.js","context-menu.js","dom-freeze.js","editor-core.js"];
   // Bump whenever /editor/* assets change so deployed pages retire the browser
   // cache instead of running a stale (e.g. pre click-guard) module build.
-  var ASSET_VER = "2026-09-zoom3";
+  var ASSET_VER = "2026-09-zoom4";
   var active = false, loading = false;
   function report(){ try { window.parent.postMessage({ __pbEditReady:1, active:active }, "*"); } catch(e){} }
   function resolveBase(cb){
