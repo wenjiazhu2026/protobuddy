@@ -33,6 +33,9 @@ export default function Review() {
   // "撤销" can no longer work after a save). Only this counter, bumped by the
   // manual "↻ 刷新" action, forces PreviewFrame to rebuild the iframe.
   const [reloadNonce, setReloadNonce] = useState(0);
+  // 批注锚点图层开关（原先是悬浮在预览画面右上角的小胶囊，遮挡原型内容，
+  // 现已上移到预览工具栏最右侧）。
+  const [pinLayer, setPinLayer] = useState(true);
   const [panelOpen, setPanelOpen] = useState(() => {
     try { return localStorage.getItem('protobuddy.review.panel.open') !== 'false'; } catch { return true; }
   });
@@ -344,6 +347,20 @@ export default function Review() {
                 批注模式 · 点击任意位置
               </span>
             )}
+            {/* 锚点图层开关：悬浮在原型画面上会遮挡内容，改为工具栏最右侧的常驻按钮 */}
+            <button
+              type="button"
+              className={`btn btn-sm btn-secondary preview-pin-toggle ${pinLayer ? 'on' : ''}`}
+              onClick={() => setPinLayer(v => !v)}
+              title={pinLayer ? '隐藏页面上的批注锚点圆点（批注列表不受影响）' : '在页面上显示批注锚点圆点'}
+              aria-pressed={pinLayer}
+            >
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M12 0C7.58 0 4 3.58 4 8c0 5.25 8 16 8 16s8-10.75 8-16c0-4.42-3.58-8-8-8z" />
+                <circle cx="12" cy="8" r="3.5" />
+              </svg>
+              <span>{pinLayer ? '隐藏锚点' : '显示锚点'}</span>
+            </button>
           </div>
           {hasPreview ? (
             <PreviewFrame
@@ -359,6 +376,7 @@ export default function Review() {
               activeAnnotationId={activeAnnotationId}
               onAnnotationClick={(ann) => setActiveAnnotationId(ann.id === activeAnnotationId ? null : ann.id)}
               onPageChange={setCurrentPage}
+              pinLayer={pinLayer}
             />
           ) : (
             <div className="empty-state" style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>

@@ -71,7 +71,7 @@ function classifyAnchor(info) {
  * {__protoNav}. This component tracks the current page so annotation pins are
  * filtered per page and new annotations record which page they belong to.
  */
-function PreviewFrame({ projectId, reloadNonce = 0, annotateMode, onAnnotate, annotations, activeAnnotationId, onAnnotationClick, onPageChange, editMode = false, onEditorSave, onEditStateChange }, ref) {
+function PreviewFrame({ projectId, reloadNonce = 0, annotateMode, onAnnotate, annotations, activeAnnotationId, onAnnotationClick, onPageChange, editMode = false, onEditorSave, onEditStateChange, pinLayer = true }, ref) {
   const containerRef = useRef(null);
   const iframeRef = useRef(null);
   const probeRef = useRef({ nextId: 0, results: {} });
@@ -110,9 +110,9 @@ function PreviewFrame({ projectId, reloadNonce = 0, annotateMode, onAnnotate, an
   const [hoverInfo, setHoverInfo] = useState(null);
   const hoverRafRef = useRef(null);
   const hoverPosRef = useRef(null);
-  // 锚点图层开关（对应参考项目“圆点显示开关”）：隐藏时不渲染任何 pin，
-  // 保留批注模式/元素探测，便于对照页面原始样式。
-  const [pinLayer, setPinLayer] = useState(true);
+  // 锚点图层开关（对应参考项目“圆点显示开关”）：由评审页顶部的预览工具栏持有
+  // （pinLayer prop），隐藏时不渲染任何 pin，保留批注模式/元素探测，便于对照
+  // 页面原始样式。
   // 当前 iframe 内最高层作用域（modal:{id} / drawer:{id} / null=页面层）。
   // 弹窗打开时只展示弹窗内批注，关闭后自动恢复页面级批注（参考项目“最高作用域”）。
   const [overlayScope, setOverlayScope] = useState(null);
@@ -783,22 +783,8 @@ function PreviewFrame({ projectId, reloadNonce = 0, annotateMode, onAnnotate, an
           ? { transform: `scale(${visualZoom})`, transformOrigin: 'top left', transition: 'transform 0.18s ease' }
           : undefined}
       />
-      {/* 锚点图层开关（不遮挡业务元素；编辑模式下不显示） */}
-      {!editMode && (
-        <button
-          type="button"
-          className={`preview-pin-toggle ${pinLayer ? 'on' : ''}`}
-          onClick={() => setPinLayer(v => !v)}
-          title={pinLayer ? '隐藏锚点圆点' : '显示锚点圆点'}
-          aria-label={pinLayer ? '隐藏锚点' : '显示锚点'}
-        >
-          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M12 0C7.58 0 4 3.58 4 8c0 5.25 8 16 8 16s8-10.75 8-16c0-4.42-3.58-8-8-8z" />
-            <circle cx="12" cy="8" r="3.5" />
-          </svg>
-          <span>{pinLayer ? '隐藏' : '显示'}</span>
-        </button>
-      )}
+      {/* 锚点图层开关已上移到预览工具栏（Review.jsx 的 .preview-toolbar），
+          不再悬浮在原型画面上遮挡内容 */}
       {/* Transparent overlay - sits on top of iframe, same size.
           In visual-edit mode the pointer must reach the iframe (the editor
           handles clicks INSIDE the page), so the overlay never captures.

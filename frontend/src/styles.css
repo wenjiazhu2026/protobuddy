@@ -1098,30 +1098,21 @@ button {
 }
 
 /* 锚点图层开关（预览右上角，不遮挡业务元素） */
+/* 锚点图层开关：位于预览工具栏最右侧（原先悬浮在预览画面右上角，会遮挡原型
+   内容）。基础外观复用 btn/btn-sm/btn-secondary，这里只补充图标与状态色。 */
 .preview-pin-toggle {
-  position: absolute;
-  top: 10px;
-  right: 10px;
-  z-index: 15;
+  margin-left: auto;
+  flex-shrink: 0;
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 4px 10px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.92);
-  color: var(--text-muted);
-  font-size: 12px;
-  cursor: pointer;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
-  transition: color 0.15s ease, border-color 0.15s ease;
-}
-.preview-pin-toggle:hover {
-  color: var(--primary);
-  border-color: var(--primary);
 }
 .preview-pin-toggle svg {
   color: var(--orange);
+}
+/* 锚点已隐藏：图标转灰，跟「显示锚点」的文案对应 */
+.preview-pin-toggle:not(.on) svg {
+  color: var(--gray-400);
 }
 
 .review-main {
