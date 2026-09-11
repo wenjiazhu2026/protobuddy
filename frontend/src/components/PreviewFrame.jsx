@@ -558,7 +558,59 @@ function PreviewFrame({ projectId, reloadNonce = 0, annotateMode, onAnnotate, an
       } catch (_) {
         return false;
       }
+    },
+    // 方案生成时的实时元素解析：对「当前页面」上的批注，用其锚点 pin 在容器内的
+    // 真实坐标再探测一次 DOM，返回 { annId: elementInfo }。探测结果会随方案生成
+    // 请求传给后端（覆盖 element_info），确保传给大模型/内置规则生成器的始终是
+    // 锚点当前对应的元素——即使元素在原型改版后已变化，或历史批注没存元素。
+    resolveElementsForPlan: async (anns) => {
+      const container = containerRef.current;
+      const iframe = iframeRef.current;
+      const results = {};
+      if (!container || !iframe?.contentWindow || !anns?.length) return results;
+      const cw = container.clientWidth || 1;
+      const ch = container.clientHeight || 1;
+      const jobs = [];
+      for (const ann of anns) {
+        if (!ann || (ann.page && normalizePage(ann.page) !== pageRef.current)) continue;
+        let pinEl = null;
+        try {
+          pinEl = container.querySelector(`.annotation-pin[data-annotation-id="${ann.id}"]`);
+        } catch (_) { /* ignore */ }
+        if (!pinEl) continue;
+        const leftPct = parseFloat(pinEl.style.left);
+        const topPct = parseFloat(pinEl.style.top);
+        if (Number.isNaN(leftPct) || Number.isNaN(topPct)) continue;
+        // 锚点已滚出可见区时 pin 是不可见状态，跳过（后端会用历史 element_info）。
+        if (pinEl.style.opacity === '0' || pinEl.style.pointerEvents === 'none') continue;
+        const probeId = ++probeRef.current.nextId;
+        probeRef.current.results[probeId] = null;
+        jobs.push({ ann, probeId, x: leftPct / 100 * cw, y: (topPct / 100) * ch });
+      }
+      for (const j of jobs) {
+        try {
+          iframe.contentWindow.postMessage(
+            { __protoProbe: 1, id: j.probeId, x: j.x, y: j.y },
+            allowedOrigin
+          );
+        } catch (_) { /* iframe 未就绪则跳过 */ continue; }
+        const info = await waitForProbe(j.probeId, 450);
+        if (info && info.found && info.tagName) {
+          results[j.ann.id] = {
+            tagName: info.tagName,
+            elementId: info.elementId || '',
+            className: info.className || '',
+            path: info.path || '',
+            text: info.text || '',
+            isHeading: !!info.isHeading,
+            fontSize: info.fontSize || ''
+          };
+        }
+      }
+      return results;
     }
+  // useImperativeHandle 的依赖里不能引用 waitForProbe（它在下方才声明，
+// 渲染期求值会触发 TDZ）；waitForProbe 是稳定 useCallback，闭包直接引用即可。
   }), [previewUrl, onPageChange, sendEditMode, allowedOrigin]);
 
   // Clean up timers and rAF on unmount
@@ -807,6 +859,7 @@ function PreviewFrame({ projectId, reloadNonce = 0, annotateMode, onAnnotate, an
           return (
             <div
               key={ann.id}
+              data-annotation-id={ann.id}
               className={`annotation-pin ${statusClass} ${activeAnnotationId === ann.id ? 'active' : ''}`}
               style={style}
               onClick={(e) => {

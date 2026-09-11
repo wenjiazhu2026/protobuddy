@@ -170,7 +170,12 @@ export const api = {
   deleteAnnotation: (id, annId, ownerToken) => request(`/projects/${id}/annotations/${annId}`, { method: 'DELETE', ownerToken }),
 
   // Plans (review/apply are owner operations; generation is open to all roles)
-  generatePlan: (id, opts = {}) => request(`/projects/${id}/plan${opts.force ? '?force=1' : ''}`, { method: 'POST' }),
+  // elements: { annotationId: element_info } —— 前端生成方案时实时探测的“锚点对应 DOM 元素”，
+  // 由后端合并到对应批注的 element_info 后交给大模型/规则生成器精确改原型。
+  generatePlan: (id, opts = {}) => request(`/projects/${id}/plan${opts.force ? '?force=1' : ''}`, {
+    method: 'POST',
+    body: { elements: opts.elements || {} }
+  }),
   listPlans: (id) => request(`/projects/${id}/plans`),
   getPlan: (planId) => request(`/projects/plans/${planId}`),
   approvePlan: (planId, ownerToken) => request(`/projects/plans/${planId}/approve`, { method: 'POST', ownerToken }),

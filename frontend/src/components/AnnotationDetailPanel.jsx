@@ -14,6 +14,16 @@ function scopeLabel(scope) {
   return '页面级';
 }
 
+// 从批注中提取“锚点对应的 DOM 元素”（用于详情展示，也随方案生成传给模型）。
+// 未命中元素或命中页面根（html/body）时视为无有效元素，返回 null。
+function anchorElement(annotation) {
+  const el = annotation?.element_info;
+  if (!el || el.found === false) return null;
+  const tag = String(el.tagName || '').toLowerCase();
+  if (!tag || tag === 'html' || tag === 'body') return null;
+  return el;
+}
+
 /**
  * AnnotationDetailPanel - the right rail of the three-column review mode.
  * Shows the selected annotation's full detail and is the dedicated place to
@@ -242,6 +252,33 @@ export default function AnnotationDetailPanel({
                   <span>{new Date(annotation.updated_at).toLocaleString('zh-CN')}</span>
                 </div>
               )}
+            </div>
+
+            {/* 锚点元素：批注锚点当前对应的 DOM 元素（生成方案时传给大模型/规则生成器） */}
+            <div className="annotation-detail-element">
+              <div className="annotation-detail-element-title">锚点元素</div>
+              {(() => {
+                const el = anchorElement(annotation);
+                const extra = el
+                  ? `${el.elementId ? `#${el.elementId}` : ''}${el.className ? ` .${String(el.className).split(/\s+/)[0]}` : ''}`
+                  : '';
+                return el ? (
+                  <>
+                    <div className="annotation-detail-tag" title={el.path || ''}>
+                      <span className="annotation-detail-tag-name">&lt;{String(el.tagName).toLowerCase()}&gt;</span>
+                      {extra}
+                    </div>
+                    {el.path && (
+                      <div className="annotation-detail-element-path" title={el.path}>{el.path}</div>
+                    )}
+                    {el.text && (
+                      <div className="annotation-detail-element-text">“{String(el.text).slice(0, 80)}{el.text.length > 80 ? '…' : ''}”</div>
+                    )}
+                  </>
+                ) : (
+                  <div className="annotation-detail-element-empty">未命中具体 DOM 节点（按页面坐标定位）</div>
+                );
+              })()}
             </div>
 
             {/* 操作区 */}

@@ -282,13 +282,30 @@ export default function Review() {
       showToast('保存失败: ' + err.message, 'error');
       return { ok: false, error: err.message };
     }
-  }, [id, guard, showToast]);
+  }, [id, guard, showToast, annotations, previewRef]);
+
+  // 只有类型为「修改原型」的待处理批注参与方案生成；同时把每条批注锚点当前
+  // 对应的 DOM 元素实时探测出来，随请求交给后端（大模型 / 规则生成器拿它
+  // 精确定位 old_code 片段）。探测失败则回退为空对象（后端用历史 element_info）。
+  const collectPlanElements = async () => {
+    let elements = {};
+    try {
+      const planAnns = annotations.filter(a => a.status === 'open' && a.type === '修改原型');
+      if (planAnns.length > 0 && previewRef.current?.resolveElementsForPlan) {
+        elements = (await previewRef.current.resolveElementsForPlan(planAnns)) || {};
+      }
+    } catch (err) {
+      console.warn('[review] resolveElementsForPlan skipped:', err?.message || err);
+    }
+    return elements;
+  };
 
   const handleGeneratePlan = async (opts = {}) => {
     if (generating) return;
     setGenerating(true);
     try {
-      const plan = await api.generatePlan(id, opts);
+      const elements = await collectPlanElements();
+      const plan = await api.generatePlan(id, { ...opts, elements });
       setLatestPlan(plan);
       showToast(`方案已生成: ${plan.changes?.length || 0} 条修改建议 (${plan.method === 'makers' ? 'Makers Models' : '规则引擎'})`);
       navigate(`/project/${id}/plan`);
@@ -298,7 +315,8 @@ export default function Review() {
       if (err.code === 'PLAN_ALREADY_EXISTS') {
         if (window.confirm(`${err.message}\n\n是否强制重新生成？（原方案仍保留，可手动驳回）`)) {
           try {
-            const plan = await api.generatePlan(id, { force: true });
+            const forceElements = await collectPlanElements();
+            const plan = await api.generatePlan(id, { force: true, elements: forceElements });
             setLatestPlan(plan);
             showToast(`方案已强制重新生成: ${plan.changes?.length || 0} 条修改建议`);
             navigate(`/project/${id}/plan`);

@@ -2070,3 +2070,52 @@ button {
 .review-main.screen-fullscreen .page-switcher-label {
   color: var(--gray-300);
 }
+
+/* ── 批注详情·锚点元素（右侧栏展示锚点对应的 DOM 元素，方案生成时传给模型）── */
+.annotation-detail-element {
+  margin: 14px 0 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+}
+.annotation-detail-element-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+.annotation-detail-tag {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 13px;
+  color: var(--gray-800);
+  word-break: break-all;
+  line-height: 1.5;
+}
+.annotation-detail-tag-name {
+  font-weight: 700;
+  color: var(--gray-900);
+}
+.annotation-detail-element-path {
+  margin-top: 4px;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.annotation-detail-element-text {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--gray-600);
+  line-height: 1.5;
+  word-break: break-all;
+  max-height: 60px;
+  overflow: hidden;
+}
+.annotation-detail-element-empty {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-style: italic;
+}

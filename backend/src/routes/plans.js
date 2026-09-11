@@ -235,6 +235,21 @@ router.post('/:id/plan', async (req, res) => {
     && a.type === '修改原型'
   );
 
+  // 前端在生成时会对每条批注锚点做实时探测（锚点当前对应的 DOM 元素），随请求体
+  // 传上来。用它覆盖批注的历史 element_info——原型改版后元素变化、或历史批注没存
+  // element_info 时，大模型 / 规则生成器仍能拿到“锚点现在对应的元素”做精确改原型。
+  const clientElements = req.body && typeof req.body.elements === 'object' && req.body.elements !== null
+    ? req.body.elements
+    : null;
+  if (clientElements) {
+    for (const a of annotations) {
+      const el = clientElements[a.id];
+      if (el && (el.tagName || el.path || el.text)) {
+        a.element_info = { ...(a.element_info || {}), ...el };
+      }
+    }
+  }
+
   if (annotations.length === 0) {
     return res.status(400).json({ error: 'No open "修改原型" annotations to generate plan from' });
   }
