@@ -1,0 +1,57 @@
+name: Deploy to EdgeOne Makers
+
+# 推送到 main 即自动构建并部署到 EdgeOne Makers 的 production 环境。
+# 手动兜底：Actions 页面点 "Run workflow"（workflow_dispatch）。
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# 同一条流水线不并发：两次部署同时跑会让线上版本互相覆盖。
+concurrency:
+  group: edgeone-makers-production
+  cancel-in-progress: false
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.11.0'
+          cache: npm
+
+      # edgeone.json 里 buildCommand = "npm run build"，它会 npm ci 安装
+      # 根依赖 + frontend 依赖，再把 frontend/dist 拷成 dist（后端与
+      # cloud-functions 一起打包进部署产物）。
+      - name: Build (EdgeOne Makers)
+        run: npx --yes edgeone@latest makers build --mode prod
+        env:
+          EDGEONE_API_TOKEN: ${{ secrets.EDGEONE_API_TOKEN }}
+
+      # 部署到既有的 protobuddy-app 项目（direct upload 类型，只能由 CLI 更新）。
+      # -a global 必须与该项目的加速区域一致，否则会部署到另一个项目上。
+      - name: Deploy to EdgeOne Makers
+        run: |
+          npx --yes edgeone@latest makers deploy . \
+            -n protobuddy-app \
+            -e production \
+            -a global \
+            --json \
+            -t "$EDGEONE_API_TOKEN" | tee /tmp/deploy-result.json
+        env:
+          EDGEONE_API_TOKEN: ${{ secrets.EDGEONE_API_TOKEN }}
+
+      - name: Report deploy result
+        if: always()
+        run: |
+          if [ -f /tmp/deploy-result.json ]; then
+            echo '### EdgeOne Makers 部署结果' >> "$GITHUB_STEP_SUMMARY"
+            echo '```json' >> "$GITHUB_STEP_SUMMARY"
+            cat /tmp/deploy-result.json >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fi
