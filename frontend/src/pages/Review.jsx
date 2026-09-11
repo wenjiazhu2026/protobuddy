@@ -396,7 +396,7 @@ export default function Review() {
             <div className="modal-body" style={{ textAlign: 'center', padding: 32 }}>
               <div className="spinner" style={{ width: 32, height: 32, margin: '0 auto 16px' }} />
               <div style={{ fontWeight: 600, marginBottom: 4 }}>Agent 正在生成修改方案</div>
-              <div className="text-sm-muted">>分析批注内容，生成结构化修改建议...</div>
+              <div className="text-sm-muted">分析批注内容，生成结构化修改建议...</div>
             </div>
           </div>
         </div>
