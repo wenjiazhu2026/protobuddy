@@ -214,8 +214,19 @@ function injectScrollSyncScript(html) {
   // 早期 proto-scroll-sync 脚本及其 __protoScrollInjected 标记。若不清理，
   // 会触发下面的幂等短路，导致新增的悬停高亮/目标定位处理器永远无法上线。
   // 因此先剥离旧的注入脚本（及其标记），再统一注入最新版本，保证注入恰好一次。
-  html = html.replace(/<script\b[^>]*>[\s\S]*?\/\*proto-scroll-sync\*\/[\s\S]*?<\/script>/gi, '');
-  html = html.split('__protoScrollInjected').join('');
+  //
+  // 匹配必须把标记锚定在开标签「紧后面」。曾经写成
+  //   /<script\b[^>]*>[\s\S]*?\/\*proto-scroll-sync\*\/[\s\S]*?<\/script>/gi
+  // 把 [\s\S]*? 放在开标签与标记之间：正则从文档里第一个 <script> 开始懒匹配，
+  // 一路跨过整个主脚本才碰到旧注入脚本里的标记，于是把原型自己的主脚本
+  // （弹窗、变体切换、表单校验……全部交互逻辑）整段删成空字符串——评审预览里
+  // 点“登录工作台”报 `openModal is not defined` 就是这么来的。锚定标记后，
+  // 只有内容以 /*proto-scroll-sync*/ 开头的注入脚本会被命中。
+  html = html.replace(/<script\b[^>]*>\s*\/\*proto-scroll-sync\*\/[\s\S]*?<\/script>/gi, '');
+  // 这里曾用 html.split('__protoScrollInjected').join('') 全局抹掉标记。那是在
+  // 无差别改写原型代码：一旦标记残留在任何 JS 里（例如上一版删脚本删了一半），
+  // 去掉标记会把 `if(window.__protoScrollInjected)return;` 变成语法错误，整段
+  // 脚本报废。旧注入脚本连同标记已被上面的正则整段删除，无需再全局替换。
 
   // data-hve-editor 标记让编辑器的序列化器（html-serializer.js）在保存时把这段
   // 运行时注入脚本一并剥离，避免把它（含 __protoScrollInjected 标记、window.open
@@ -533,8 +544,18 @@ function sendContent(res, filePath, content) {
 
   let text = content.data;
   if (ext === 'html' || ext === 'htm') {
+    const original = text;
     text = injectScrollSyncScript(text);
     text = injectEditorBootstrap(text);
+    // 兜底哨兵：注入只会往文档里「加」脚本，产物绝不可能比原文更短。一旦变短，
+    // 说明注入逻辑在删原型自己的内容（历史上清理旧注入脚本的正则就因为没锚定
+    // 标记，把主脚本整段吃掉了，页面静默失去全部交互）。这里只告警不改写，
+    // 保留现场便于定位。
+    if (text.length < original.length) {
+      console.warn(
+        `[ProtoBuddy] HTML 注入后内容变短：${filePath} ${original.length} → ${text.length}（差 ${original.length - text.length} 字符），疑似注入逻辑误删原型内容`
+      );
+    }
     res.type('html').send(text);
   } else {
     res.type(ext || 'text/plain').send(text);
