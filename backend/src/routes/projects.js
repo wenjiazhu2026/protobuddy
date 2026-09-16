@@ -43,7 +43,8 @@ router.get('/', async (req, res) => {
   res.json(projects.map(p => ({
     ...p,
     edgeone_token: undefined,
-    makers_key: undefined  // Never expose keys
+    makers_key: undefined,  // Never expose keys
+    cloudflare_token: undefined
   })));
 });
 
@@ -54,7 +55,8 @@ router.get('/:id', async (req, res) => {
   res.json({
     ...project,
     edgeone_token: project.edgeone_token ? '***' : '',
-    makers_key: project.makers_key ? '***' : ''
+    makers_key: project.makers_key ? '***' : '',
+    cloudflare_token: project.cloudflare_token ? '***' : ''
   });
 });
 
@@ -87,6 +89,11 @@ router.post('/', async (req, res) => {
   const makers_key = clean(raw.makers_key, MAX_STR);
   const description = clean(raw.description, 2000);
   const custom_domain = clean(raw.custom_domain, MAX_STR);
+  // Cloudflare-side custom-domain binding (see services/domainBinding.js).
+  const cname_target = clean(raw.cname_target, MAX_STR);
+  const cloudflare_token = clean(raw.cloudflare_token, MAX_STR);
+  const domain_txt_name = clean(raw.domain_txt_name, MAX_STR);
+  const domain_txt_value = clean(raw.domain_txt_value, MAX_STR);
 
   const projectSlug = slug || name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || `proj-${Date.now()}`;
 
@@ -98,6 +105,10 @@ router.post('/', async (req, res) => {
     makers_key: makers_key || '',
     description: description || '',
     custom_domain: custom_domain || '',
+    cname_target: cname_target || '',
+    cloudflare_token: cloudflare_token || '',
+    domain_txt_name: domain_txt_name || '',
+    domain_txt_value: domain_txt_value || '',
     current_url: '',
     deploy_method: '',
     status: 'created',
@@ -110,7 +121,8 @@ router.post('/', async (req, res) => {
   res.status(201).json({
     ...project,
     edgeone_token: project.edgeone_token ? '***' : '',
-    makers_key: project.makers_key ? '***' : ''
+    makers_key: project.makers_key ? '***' : '',
+    cloudflare_token: project.cloudflare_token ? '***' : ''
   });
 });
 
@@ -119,7 +131,8 @@ router.put('/:id', requireOwnerAuth, async (req, res) => {
   const project = await getById('projects', req.params.id);
   if (!project) return res.status(404).json({ error: 'Project not found' });
 
-  const { name, edgeone_project_name, edgeone_token, makers_key, description, makers_model, custom_domain } = req.body;
+  const { name, edgeone_project_name, edgeone_token, makers_key, description, makers_model, custom_domain,
+    cname_target, cloudflare_token, domain_txt_name, domain_txt_value } = req.body;
   const patch = {};
   if (name !== undefined) patch.name = name;
   if (edgeone_project_name !== undefined) patch.edgeone_project_name = edgeone_project_name;
@@ -128,12 +141,19 @@ router.put('/:id', requireOwnerAuth, async (req, res) => {
   if (description !== undefined) patch.description = description;
   if (makers_model !== undefined) patch.makers_model = makers_model;
   if (custom_domain !== undefined) patch.custom_domain = custom_domain;
+  if (cname_target !== undefined) patch.cname_target = cname_target;
+  // Same contract as the other keys: the masked placeholder must never
+  // overwrite a stored secret.
+  if (cloudflare_token !== undefined && cloudflare_token !== '***') patch.cloudflare_token = cloudflare_token;
+  if (domain_txt_name !== undefined) patch.domain_txt_name = domain_txt_name;
+  if (domain_txt_value !== undefined && domain_txt_value !== '***') patch.domain_txt_value = domain_txt_value;
 
   const updated = await update('projects', req.params.id, patch);
   res.json({
     ...updated,
     edgeone_token: updated.edgeone_token ? '***' : '',
-    makers_key: updated.makers_key ? '***' : ''
+    makers_key: updated.makers_key ? '***' : '',
+    cloudflare_token: updated.cloudflare_token ? '***' : ''
   });
 });
 

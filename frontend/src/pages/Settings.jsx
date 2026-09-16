@@ -18,10 +18,23 @@ export default function Settings() {
     edgeone_token: '',
     makers_key: '',
     makers_model: '@makers/hy3',
-    custom_domain: ''
+    custom_domain: '',
+    cname_target: '',
+    cloudflare_token: '',
+    domain_txt_name: '',
+    domain_txt_value: ''
   });
   const { showToast } = useToast();
   const [deleting, setDeleting] = useState(false);
+  // Custom-domain DNS binding (Cloudflare side of the custom-domain flow).
+  const [domainBusy, setDomainBusy] = useState('');
+  const [domainResult, setDomainResult] = useState(null);
+  const [domainError, setDomainError] = useState('');
+  // Server-side view of the binding config (readiness + the manual EdgeOne
+  // steps). Only fetched when the owner is already verified in this session —
+  // the endpoint is owner-gated, and an unverified visitor must not be
+  // prompted for a password just by opening settings.
+  const [domainConfig, setDomainConfig] = useState(null);
 
   const handleDeleteProject = async () => {
     // Double confirmation: 1) warning dialog 2) type the exact project name
@@ -76,14 +89,54 @@ export default function Settings() {
         edgeone_token: '',  // Don't pre-fill sensitive keys
         makers_key: '',
         makers_model: p.makers_model || '@makers/hy3',
-        custom_domain: p.custom_domain || ''
+        custom_domain: p.custom_domain || '',
+        cname_target: p.cname_target || '',
+        cloudflare_token: '',
+        domain_txt_name: p.domain_txt_name || '',
+        domain_txt_value: ''
       });
+      // Readiness + manual-step guidance, when the owner is already verified.
+      const existingOwnerToken = getOwnerToken(id);
+      if (existingOwnerToken) {
+        api.getDomainConfig(id, existingOwnerToken)
+          .then(setDomainConfig)
+          .catch(() => { /* not verified / endpoint unavailable — degrade silently */ });
+      }
       setLoading(false);
     }).catch(err => {
       showToast('加载失败: ' + err.message, 'error');
       setLoading(false);
     });
   }, [id]);
+
+  /**
+   * Run a DNS action with owner verification. The endpoints are owner-gated
+   * because they read stored credentials and mutate records in the Cloudflare
+   * zone, so every call goes through the password guard.
+   */
+  const runDomainAction = async (label, fn) => {
+    setDomainBusy(label);
+    setDomainError('');
+    setDomainResult(null);
+    try {
+      const result = await guard(id, () => fn(getOwnerToken(id)));
+      setDomainResult(result);
+      showToast(label === 'bind' ? 'DNS 绑定完成' : '校验完成');
+    } catch (err) {
+      if (err.message !== 'owner verification cancelled') setDomainError(err.message);
+    } finally {
+      setDomainBusy('');
+    }
+  };
+
+  // Send unsaved form values along so binding works without a separate save.
+  const domainPayload = () => ({
+    custom_domain: form.custom_domain,
+    cname_target: form.cname_target,
+    cloudflare_token: form.cloudflare_token,
+    domain_txt_name: form.domain_txt_name,
+    domain_txt_value: form.domain_txt_value
+  });
 
   const handleSave = async () => {
     setSaving(true);
@@ -93,17 +146,23 @@ export default function Settings() {
         description: form.description,
         edgeone_project_name: form.edgeone_project_name,
         makers_model: form.makers_model,
-        custom_domain: form.custom_domain.trim().replace(/^https?:\/\//, '').replace(/\/$/, '')
+        custom_domain: form.custom_domain.trim().replace(/^https?:\/\//, '').replace(/\/$/, ''),
+        // Trailing dots are stripped: the EdgeOne console shows the CNAME target
+        // with one, and a literal dot would be written into the DNS record.
+        cname_target: form.cname_target.trim().replace(/\.+$/, ''),
+        domain_txt_name: form.domain_txt_name.trim().replace(/\.+$/, ''),
+        domain_txt_value: form.domain_txt_value.trim()
       };
       // Only update keys if user entered new values
       if (form.edgeone_token) patch.edgeone_token = form.edgeone_token;
       if (form.makers_key) patch.makers_key = form.makers_key;
+      if (form.cloudflare_token) patch.cloudflare_token = form.cloudflare_token;
 
       // Owner maintenance operation: guarded by the owner password (one-time per session)
       const updated = await guard(id, () => api.updateProject(id, patch, getOwnerToken(id)));
       setProject(updated);
       showToast('设置已保存');
-      setForm({ ...form, edgeone_token: '', makers_key: '' });
+      setForm({ ...form, edgeone_token: '', makers_key: '', cloudflare_token: '' });
     } catch (err) {
       if (err.message !== 'owner verification cancelled') showToast('保存失败: ' + err.message, 'error');
     } finally {
@@ -143,8 +202,17 @@ export default function Settings() {
             <label className="form-label">EdgeOne 项目名</label>
             <input className="form-input" value={form.edgeone_project_name} onChange={e => setForm({ ...form, edgeone_project_name: e.target.value })} placeholder="EdgeOne Makers 上的项目标识" />
           </div>
+        </div>
+      </div>
+
+      <div className="card" style={{ marginTop: 16 }}>
+        <div className="card-header">
+          <span className="card-title">自定义域名与 DNS 绑定</span>
+          <span className="badge badge-blue">Cloudflare 自动建记录</span>
+        </div>
+        <div className="card-body">
           <div className="form-group">
-            <label className="form-label">自定义域名（可选）</label>
+            <label className="form-label">自定义域名</label>
             <input
               className="form-input"
               value={form.custom_domain}
@@ -152,11 +220,148 @@ export default function Settings() {
               placeholder="如 cis2.20140107.xyz"
             />
             <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>
-              部署后优先使用此域名作为原型访问地址。需先在 EdgeOne Makers 控制台绑定该域名并完成 DNS 验证：
-              进入项目详情 → 域名管理 → 添加自定义域名 → 添加 CNAME 记录。
-              绑定验证通过后，部署 URL 将自动切换为自定义域名。
+              绑定验证通过后，部署 URL 将自动切换为该域名。
             </div>
           </div>
+          <div className="form-group">
+            <label className="form-label">EdgeOne CNAME 目标</label>
+            <input
+              className="form-input"
+              value={form.cname_target}
+              onChange={e => setForm({ ...form, cname_target: e.target.value })}
+              placeholder="如 a4285573.cis2.20140107.xyz.dns.edgeone.site"
+            />
+            <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>
+              EdgeOne 控制台「添加自定义域名」弹窗里给出的那条值，末尾的点可省略。
+              该值含服务端生成的哈希前缀，无法推导，必须从控制台复制。
+            </div>
+          </div>
+          <div className="form-group">
+            <label className="form-label">
+              Cloudflare API Token
+              {project.cloudflare_token === '***' && <span style={{ marginLeft: 8, color: 'var(--green)', fontSize: 12 }}>● 已设置</span>}
+            </label>
+            <input
+              className="form-input"
+              type="password"
+              value={form.cloudflare_token}
+              onChange={e => setForm({ ...form, cloudflare_token: e.target.value })}
+              placeholder={project.cloudflare_token === '***' ? '已设置（输入新值覆盖）' : '输入 Cloudflare API Token'}
+            />
+            <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>
+              权限需含 <code>Zone:DNS:Edit</code>，且限定到 20140107.xyz 所在 Zone。
+              仅存后端，不下发浏览器；记录按 DNS only（灰云）创建——EdgeOne 需要看到真实 CNAME。
+            </div>
+          </div>
+          <div className="form-group">
+            <label className="form-label">归属验证 TXT（可选）</label>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <input
+                className="form-input"
+                value={form.domain_txt_name}
+                onChange={e => setForm({ ...form, domain_txt_name: e.target.value })}
+                placeholder="TXT 记录名"
+              />
+              <input
+                className="form-input"
+                value={form.domain_txt_value}
+                onChange={e => setForm({ ...form, domain_txt_value: e.target.value })}
+                placeholder="TXT 记录值"
+              />
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4 }}>
+              仅当 EdgeOne 弹窗要求添加归属验证 TXT 记录时填写，否则留空。
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <button
+              className="btn btn-primary"
+              disabled={!!domainBusy}
+              onClick={() => runDomainAction('bind', (t) => api.bindDomain(id, domainPayload(), t))}
+            >
+              {domainBusy === 'bind' ? '绑定中...' : '绑定 DNS'}
+            </button>
+            <button
+              className="btn btn-secondary"
+              disabled={!!domainBusy}
+              onClick={() => runDomainAction('verify', (t) => api.verifyDomain(id, t))}
+            >
+              {domainBusy === 'verify' ? '校验中...' : '仅校验'}
+            </button>
+            <button
+              className="btn btn-secondary"
+              disabled={!!domainBusy}
+              onClick={() => runDomainAction('test', (t) => api.testCloudflareToken(id, form.cloudflare_token, t))}
+            >
+              {domainBusy === 'test' ? '测试中...' : '测试 Token'}
+            </button>
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 8 }}>
+            绑定会先用当前表单值（无需先保存），因此可直接粘贴控制台的值后点击绑定。
+          </div>
+
+          {Array.isArray(domainConfig?.manual_steps) && domainConfig.manual_steps.length > 0 && (
+            <details style={{ marginTop: 10 }}>
+              <summary style={{ cursor: 'pointer', fontSize: 13 }}>
+                如何在 EdgeOne 拿到 CNAME 目标？（EdgeOne 无 API，这一步必须人工完成）
+              </summary>
+              <ol style={{ margin: '6px 0 0 16px', padding: 0, fontSize: 12, color: 'var(--text-muted)' }}>
+                {domainConfig.manual_steps.map((s, i) => <li key={i}>{s}</li>)}
+              </ol>
+            </details>
+          )}
+
+          {domainError && (
+            <div style={{ marginTop: 12, padding: 12, borderRadius: 6, fontSize: 12, background: 'var(--red-light, #fdecea)', color: 'var(--red)' }}>
+              {domainError}
+            </div>
+          )}
+
+          {domainResult && (
+            <div style={{ marginTop: 12, padding: 12, borderRadius: 6, fontSize: 12, background: 'var(--primary-light)' }}>
+              <div style={{ fontWeight: 600, marginBottom: 6 }}>
+                {domainResult.token
+                  ? `Cloudflare Token 有效（状态 ${domainResult.token.status}）`
+                  : `绑定结果${domainResult.zone ? ` · Zone ${domainResult.zone.name}` : ''}`}
+              </div>
+              {(domainResult.steps || []).map((s, i) => (
+                <div key={i} style={{ fontFamily: 'monospace' }}>
+                  [{s.step}] {s.action} · {s.detail}
+                </div>
+              ))}
+              {domainResult.dns && !domainResult.dns.error && (
+                <div style={{ marginTop: 6 }}>
+                  DNS：{domainResult.dns.record
+                    ? `${domainResult.dns.record.name} → ${domainResult.dns.record.content}`
+                    : '未找到 CNAME 记录'}
+                  {domainResult.dns.contentMatches === false && '（记录值与 EdgeOne 目标不一致）'}
+                  {domainResult.dns.proxiedWarning && ' ⚠ 代理已开启，EdgeOne 无法校验归属（需改为 DNS only）'}
+                  {domainResult.dns.propagation && !domainResult.dns.propagation.checked && ` · ${domainResult.dns.propagation.reason}`}
+                  {domainResult.dns.propagationMatches === true && ' · 解析已生效'}
+                </div>
+              )}
+              {domainResult.dns && domainResult.dns.error && (
+                <div style={{ marginTop: 6, color: 'var(--red)' }}>DNS 校验异常：{domainResult.dns.error}</div>
+              )}
+              {domainResult.edgeone && (
+                <div style={{ marginTop: 6 }}>
+                  EdgeOne：
+                  {domainResult.edgeone.available
+                    ? `${domainResult.edgeone.boundInEdgeone ? '已添加该域名' : '尚未添加该域名'}（状态 ${domainResult.edgeone.domainStatus}）· 加速区域 ${domainResult.edgeone.accelerationArea || '未知'}`
+                    : domainResult.edgeone.reason}
+                </div>
+              )}
+              {Array.isArray(domainResult.manual_steps) && domainResult.manual_steps.length > 0 && (
+                <details style={{ marginTop: 8 }}>
+                  <summary style={{ cursor: 'pointer' }}>仍需在 EdgeOne 控制台完成的手动步骤</summary>
+                  <ol style={{ margin: '6px 0 0 16px', padding: 0 }}>
+                    {domainResult.manual_steps.map((s, i) => <li key={i}>{s}</li>)}
+                  </ol>
+                </details>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
@@ -231,7 +436,7 @@ export default function Settings() {
           <span className="card-title" style={{ color: 'var(--red)' }}>危险操作</span>
         </div>
         <div className="card-body">
-          <div className="text-sm-muted" style={{ marginBottom: 12 }}>>
+          <div className="text-sm-muted" style={{ marginBottom: 12 }}>
             删除项目「{project.name}」将永久移除所有原型文件、批注、修改方案与任务，且不可恢复。
             删除需要经过二次确认（输入项目名称）并验证 owner 密码。
           </div>

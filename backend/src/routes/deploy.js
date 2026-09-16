@@ -3,6 +3,7 @@ import { getById, insert, update, query } from '../db.js';
 import { deployToEdgeOne } from '../services/edgeone.js';
 import { prepareForDeploy, probeGeneratorEnv, apiBaseFromReq } from '../services/generator.js';
 import { checkDeployment, getProjectUrl, describeProjectDomains, getOrCreateProject } from '../services/makersApi.js';
+import { syncDomainDnsIfStale } from '../services/domainBinding.js';
 import { requireOwnerAuth } from '../services/ownerAuth.js';
 
 const router = Router();
@@ -88,6 +89,13 @@ router.post('/:id/deploy', requireOwnerAuth, async (req, res) => {
       version
     });
 
+    // Keep the custom-domain DNS record in sync — but only when it can actually
+    // be stale. The Cloudflare record only changes with (domain, CNAME target),
+    // so a recorded successful sync for the same pair skips the API round-trip
+    // on every subsequent deploy. Failures never fail the deploy: the prototype
+    // is already live on its EdgeOne URL.
+    const domainDns = await syncDomainDnsIfStale(project);
+
     res.json({
       success: result.success || method === 'local_fallback',
       url: previewUrl,
@@ -102,6 +110,9 @@ router.post('/:id/deploy', requireOwnerAuth, async (req, res) => {
       deploy_stats: result.deployStats || null,
       custom_domain_bound: result.customDomainBound,
       custom_domain_status: result.customDomainStatus,
+      edgeone_area: result.area || '',
+      area_filing_required: !!result.filingRequired,
+      domain_dns: domainDns,
       generator: gen.generator ? {
         script: gen.generator.script,
         ran: !!gen.ran,

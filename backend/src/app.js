@@ -11,6 +11,7 @@ import deployRouter from './routes/deploy.js';
 import annotationsRouter from './routes/annotations.js';
 import plansRouter from './routes/plans.js';
 import tasksRouter from './routes/tasks.js';
+import domainRouter from './routes/domain.js';
 import ownerAuthRouter from './routes/ownerAuth.js';
 import { isBlobMode } from './config.js';
 
@@ -159,6 +160,7 @@ export function createApp({ makersPrefix } = {}) {
   app.use('/api/projects', wrapAsyncHandlers(annotationsRouter)); // /api/projects/:id/annotations
   app.use('/api/projects', wrapAsyncHandlers(plansRouter));       // /api/projects/:id/plan + /api/plans/:planId
   app.use('/api/projects', wrapAsyncHandlers(tasksRouter));       // /api/projects/:id/tasks*
+  app.use('/api/projects', wrapAsyncHandlers(domainRouter));      // /api/projects/:id/domain/*
 
   // Visual editor assets (lazy-loaded inside the preview iframe by the
   // bootstrap injected in files.js). Single source of truth: frontend/public/editor,

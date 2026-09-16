@@ -156,6 +156,19 @@ export const api = {
   listDeployments: (id) => request(`/projects/${id}/deployments`),
   setPreviewUrl: (id, url, ownerToken) => request(`/projects/${id}/preview-url`, { method: 'POST', body: { url }, ownerToken }),
 
+  // Custom-domain DNS automation (Cloudflare). All owner-gated: they touch
+  // stored credentials and mutate DNS records in the user's Cloudflare zone.
+  getDomainConfig: (id, ownerToken) => request(`/projects/${id}/domain`, { ownerToken }),
+  testCloudflareToken: (id, cloudflareToken, ownerToken) => request(`/projects/${id}/domain/test`, {
+    method: 'POST', body: { cloudflare_token: cloudflareToken }, ownerToken
+  }),
+  bindDomain: (id, payload, ownerToken) => request(`/projects/${id}/domain/bind`, {
+    method: 'POST', body: payload, ownerToken
+  }),
+  verifyDomain: (id, ownerToken) => request(`/projects/${id}/domain/verify`, {
+    method: 'POST', ownerToken
+  }),
+
   // Owner password verification
   verifyOwnerPassword: (id, password) => request(`/projects/${id}/owner-auth/verify`, { method: 'POST', body: { password } }),
   ownerAuthStatus: (id) => request(`/projects/${id}/owner-auth/status`),
