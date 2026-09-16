@@ -23,6 +23,61 @@ import crypto from 'crypto';
 const API_BASES = ['https://pages-api.cloud.tencent.com/v1', 'https://pages-api.edgeone.ai/v1'];
 const POLL_INTERVAL_MS = 5000;
 
+// ---------------------------------------------------------------------------
+// Acceleration area (加速区域)
+// ---------------------------------------------------------------------------
+// The area is fixed AT CREATE TIME and cannot be changed afterwards. It decides
+// whether a custom domain may be bound without ICP filing (工信部备案):
+//   overseas          全球可用区（不含中国大陆）→ 绑自定义域名**无需**备案
+//   global            全球可用区（含中国大陆）  → 需备案
+//   chinese-mainland  中国大陆可用区            → 需备案
+// Verified against edgeone@1.6.40: `deploy -a/--area` choices are
+// global|overseas with default `global`, and the chosen value is passed
+// straight through as the `Area` field of CreatePagesProject.
+//
+// Default is `overseas` so a newly auto-created project can serve a custom
+// domain without filing. Override with EDGEONE_AREA=global when the account
+// actually has ICP-filed domains and wants mainland acceleration.
+const DEFAULT_AREA = 'overseas';
+const AREA_ALIASES = {
+  overseas: 'overseas',
+  global: 'global',
+  'chinese-mainland': 'chinese-mainland',
+  china: 'chinese-mainland',
+  mainland: 'chinese-mainland'
+};
+// Only areas known to EXCLUDE Chinese mainland are filing-free. Treating every
+// other (including unrecognised) value as filing-required is the safe default:
+// a spurious warning costs a log line, whereas a missed one costs a rejected
+// custom-domain binding after the project area is already frozen.
+const FILING_FREE_AREAS = new Set(['overseas']);
+
+/**
+ * Resolve the acceleration area to use for NEW projects (default `overseas`).
+ * Strict: the result is sent straight to CreatePagesProject as `Area`, so an
+ * unrecognised EDGEONE_AREA value must never reach the API — it falls back to
+ * the default instead of failing project creation with an invalid enum.
+ */
+export function resolveArea(raw = process.env.EDGEONE_AREA) {
+  const value = String(raw ?? '').trim().toLowerCase();
+  return AREA_ALIASES[value] || DEFAULT_AREA;
+}
+
+/** Normalise an area string (alias -> canonical). Unknown values pass through. */
+function canonicalArea(raw) {
+  const value = String(raw ?? '').trim().toLowerCase();
+  return AREA_ALIASES[value] || value;
+}
+
+/**
+ * True when the area includes Chinese mainland, i.e. a custom domain needs ICP filing.
+ * An empty area returns false (nothing to judge); any unrecognised value returns true.
+ */
+export function areaRequiresFiling(area) {
+  const canon = canonicalArea(area);
+  return canon ? !FILING_FREE_AREAS.has(canon) : false;
+}
+
 let resolvedBase = null;
 
 /** POST one action to the Pages API. Returns parsed JSON (Code === 0 on success). */
@@ -56,38 +111,57 @@ export async function callApi(token, action, data = {}) {
   throw lastErr || new Error('Pages API unreachable');
 }
 
-/** Find a project by name, or create it. Returns { projectId, name }. */
-export async function getOrCreateProject(token, name) {
-  const desc = await callApi(token, 'DescribePagesProjects', {
+/**
+ * Look up an existing project by name. READ-ONLY — returns null when absent.
+ * Kept separate from getOrCreateProject so diagnostics (domain status checks)
+ * never create a project as a side effect.
+ */
+export async function findProjectByName(token, name) {
+  const res = await callApi(token, 'DescribePagesProjects', {
     Filters: [{ Name: 'Name', Values: [name] }],
     Offset: 0,
     Limit: 10,
     OrderBy: 'CreatedOn'
   });
-  let projects = desc.Data?.Response?.Projects || [];
-  if (projects.length === 0) {
+  return (res.Data?.Response?.Projects || [])[0] || null;
+}
+
+/** Find a project by name, or create it. Returns { projectId, name, area, filingRequired }. */
+export async function getOrCreateProject(token, name) {
+  let proj = await findProjectByName(token, name);
+  if (!proj) {
+    // Create with an area that excludes Chinese mainland by default, so the
+    // custom domain can be bound without ICP filing.
+    const area = resolveArea();
+    console.log(`[makersApi] Creating EdgeOne project '${name}' with acceleration area '${area}' (ICP filing required: ${areaRequiresFiling(area)})`);
     await callApi(token, 'CreatePagesProject', {
       Name: name,
       Provider: 'Upload',
       Channel: 'Custom',
-      Area: 'global',
+      Area: area,
       Source: 'protobuddy'
     });
     await new Promise(r => setTimeout(r, 2000));
-    const desc2 = await callApi(token, 'DescribePagesProjects', {
-      Filters: [{ Name: 'Name', Values: [name] }],
-      Offset: 0,
-      Limit: 10,
-      OrderBy: 'CreatedOn'
-    });
-    projects = desc2.Data?.Response?.Projects || [];
-    if (projects.length === 0) throw new Error(`Failed to create project ${name}`);
+    proj = await findProjectByName(token, name);
+    if (!proj) throw new Error(`Failed to create project ${name}`);
   }
-  const proj = projects[0];
   if (proj.Provider && proj.Provider !== 'Upload') {
     throw new Error(`Project ${name} exists but Provider is '${proj.Provider}' (only Upload projects are supported)`);
   }
-  return { projectId: proj.ProjectId, name: proj.Name };
+
+  // The area is immutable after creation, so an existing project that includes
+  // Chinese mainland cannot be "fixed" here — warn instead, otherwise the owner
+  // only discovers it when binding a custom domain is rejected for ICP filing.
+  const area = proj.Area || proj.area || '';
+  const filingRequired = areaRequiresFiling(area);
+  if (filingRequired) {
+    console.warn(
+      `[makersApi] Project '${name}' acceleration area is '${area}' (includes Chinese mainland): ` +
+      `binding a custom domain requires ICP filing. To serve a non-filed domain, create a new project with EDGEONE_AREA=overseas.`
+    );
+  }
+
+  return { projectId: proj.ProjectId, name: proj.Name, area, filingRequired };
 }
 
 // ---------------------------------------------------------------------------
@@ -175,12 +249,12 @@ async function cosPut(bucket, key, body, contentType, creds) {
  * @param {string} opts.token Makers API token
  * @param {string} opts.projectName target Makers project name
  * @param {Array<{path:string, body:Uint8Array}>} opts.files relative paths -> content
- * @returns {Promise<{projectId:string, deploymentId:string}>}
+ * @returns {Promise<{projectId:string, deploymentId:string, area:string, filingRequired:boolean}>}
  */
 export async function uploadAndDeploy({ token, projectName, files }) {
   if (!files || files.length === 0) throw new Error('No files to deploy');
 
-  const { projectId } = await getOrCreateProject(token, projectName);
+  const { projectId, area, filingRequired } = await getOrCreateProject(token, projectName);
 
   const tokRes = await callApi(token, 'DescribePagesCosTempToken', { ProjectId: projectId });
   const cos = tokRes.Data?.Response || {};
@@ -210,7 +284,7 @@ export async function uploadAndDeploy({ token, projectName, files }) {
   });
   const deploymentId = depRes.Data?.Response?.DeploymentId;
   if (!deploymentId) throw new Error('CreatePagesDeployment returned no DeploymentId');
-  return { projectId, deploymentId };
+  return { projectId, deploymentId, area, filingRequired };
 }
 
 /**
@@ -301,7 +375,7 @@ export async function getProjectUrl(token, projectId, opts = {}) {
 
 /**
  * Query EdgeOne for all custom domains bound to a project (diagnostic).
- * @returns {Promise<{presetDomain:string, isTld:boolean, customDomains:Array<{Domain:string,Status:string}>}>}
+ * @returns {Promise<{presetDomain:string, isTld:boolean, accelerationArea:string, filingRequired:boolean, customDomains:Array<{Domain:string,Status:string}>}>}
  */
 export async function describeProjectDomains(token, projectId) {
   const res = await callApi(token, 'DescribePagesProjects', {
@@ -309,9 +383,12 @@ export async function describeProjectDomains(token, projectId) {
   });
   const proj = (res.Data?.Response?.Projects || [])[0];
   if (!proj) throw new Error('Project not found in EdgeOne');
+  const area = proj.Area || proj.area || '';
   return {
     presetDomain: proj.PresetDomain || '',
     isTld: proj.IsTld === 1,
+    accelerationArea: area,
+    filingRequired: areaRequiresFiling(area),
     customDomains: (proj.CustomDomains || []).map(d => ({ Domain: d.Domain, Status: d.Status || '(missing — treated as active)' }))
   };
 }

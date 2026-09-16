@@ -4,7 +4,7 @@ import path from 'path';
 import fs from 'fs';
 import { getProjectDir, findEntryPoint, listProjectFiles, readFileContent } from './fileStorage.js';
 import { isBlobMode } from '../config.js';
-import { uploadAndDeploy, pollDeployment, getProjectUrl } from './makersApi.js';
+import { uploadAndDeploy, pollDeployment, getProjectUrl, resolveArea, areaRequiresFiling } from './makersApi.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -221,12 +221,12 @@ export async function deployToEdgeOne(project) {
       }
       console.log(`[edgeone] Deploy manifest: ${files.length}/${collected.total} files, ${(collected.totalBytes / 1024).toFixed(1)}KB, entry='${collected.entry || '/'}'${collected.skipped.length ? `, skipped: ${collected.skipped.map(s => `${s.rel}(${s.reason})`).join(', ')}` : ''}`);
 
-      const { projectId, deploymentId } = await uploadAndDeploy({ token: project.edgeone_token, projectName, files });
+      const { projectId, deploymentId, area, filingRequired } = await uploadAndDeploy({ token: project.edgeone_token, projectName, files });
       const polled = await pollDeployment({ token: project.edgeone_token, projectId, deploymentId, budgetMs: CLOUD_POLL_BUDGET_MS });
 
       if (!polled.done) {
         // Function may hit its time limit; the frontend continues polling deploy-status.
-        return { success: true, url: '', method: 'edgeone_deploying', projectId, deploymentId, deployStats, log: `Deployment ${deploymentId} is building on EdgeOne (${files.length} files).` };
+        return { success: true, url: '', method: 'edgeone_deploying', projectId, deploymentId, area, filingRequired, deployStats, log: `Deployment ${deploymentId} is building on EdgeOne (${files.length} files).` };
       }
       if (polled.status !== 'Success') {
         throw new Error(`EdgeOne deployment ended with status: ${polled.status}`);
@@ -236,9 +236,10 @@ export async function deployToEdgeOne(project) {
         preferredDomain: project.custom_domain || undefined
       });
       const url = urlResult.url;
-      console.log(`[edgeone] Deploy success: ${url}`);
+      console.log(`[edgeone] Deploy success: ${url} (acceleration area: ${area || 'unknown'})`);
       return {
         success: true, url, method: 'edgeone', projectId, deploymentId, deployStats,
+        area, filingRequired,
         log: `Deployed ${files.length} files (entry='${collected.entry || '/'}'). ${url}`,
         customDomainBound: urlResult.customDomainBound,
         customDomainStatus: urlResult.customDomainStatus
@@ -295,9 +296,16 @@ export async function deployToEdgeOne(project) {
       // a crafted project name can never break out into command execution.
       const projectName = safeProjectName(project.edgeone_project_name, `proto-${project.slug || project.id}`);
 
+      // `-a overseas` is REQUIRED, not cosmetic: the CLI's own default is
+      // `global` (全球可用区含中国大陆), which pins a newly auto-created
+      // project to a mainland-inclusive area where binding a custom domain
+      // demands ICP filing. The area is immutable after creation, so it must be
+      // right on the very first deploy that creates the project.
+      const area = resolveArea();
+
       const { stdout, stderr } = await execFileAsync(
         'npx',
-        ['--yes', 'edgeone', 'makers', 'deploy', '.', '-n', projectName, '-t', project.edgeone_token, '-e', 'production'],
+        ['--yes', 'edgeone', 'makers', 'deploy', '.', '-n', projectName, '-t', project.edgeone_token, '-e', 'production', '-a', area],
         {
           cwd: deployDir,
           timeout: DEPLOY_TIMEOUT,
@@ -312,12 +320,14 @@ export async function deployToEdgeOne(project) {
       const url = extractUrl(output);
 
       if (url) {
-        console.log(`[edgeone] Deploy success: ${url}`);
+        console.log(`[edgeone] Deploy success: ${url} (acceleration area: ${area})`);
         return {
           success: true,
           url,
           method: 'edgeone',
           deployStats,
+          area,
+          filingRequired: areaRequiresFiling(area),
           log: output,
           logFile
         };
